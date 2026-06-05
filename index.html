@@ -437,6 +437,21 @@
                 <label class="control-row">Buracos negros distantes <span data-value-for="blackHoles"></span><input id="blackHoles" type="range" min="0" max="2" step="1"></label>
             </div>
             <div class="control-group">
+                <div class="control-title">Sistema Cosmico</div>
+                <label class="toggle-row">Buracos negros cinematicos <input id="cosmicBlackHolesEnabled" type="checkbox"></label>
+                <label class="toggle-row">Cometas animados <input id="cosmicCometsEnabled" type="checkbox"></label>
+                <label class="toggle-row">Nebulosas animadas <input id="cosmicNebulasEnabled" type="checkbox"></label>
+                <label class="toggle-row">Satelites / estacoes <input id="cosmicStationsEnabled" type="checkbox"></label>
+                <label class="toggle-row">Sistema solar distante <input id="cosmicPlanetsEnabled" type="checkbox"></label>
+                <label class="toggle-row">Orbitas visuais <input id="cosmicOrbitLinesEnabled" type="checkbox"></label>
+                <label class="toggle-row">Lente gravitacional avancada <input id="cosmicLensDistortionEnabled" type="checkbox"></label>
+                <label class="control-row">Quantidade de cometas <span data-value-for="cosmicCometCount"></span><input id="cosmicCometCount" type="range" min="0" max="10" step="1"></label>
+                <label class="control-row">Tamanho da cauda <span data-value-for="cosmicCometTailIntensity"></span><input id="cosmicCometTailIntensity" type="range" min="0.4" max="2.5" step="0.05"></label>
+                <label class="control-row">Planetas secundarios <span data-value-for="cosmicPlanetCount"></span><input id="cosmicPlanetCount" type="range" min="0" max="8" step="1"></label>
+                <label class="control-row">Satelites / estacoes <span data-value-for="cosmicStationCount"></span><input id="cosmicStationCount" type="range" min="0" max="8" step="1"></label>
+                <label class="control-row">Buracos negros <span data-value-for="cosmicBlackHoleCount"></span><input id="cosmicBlackHoleCount" type="range" min="0" max="2" step="1"></label>
+            </div>
+            <div class="control-group">
                 <div class="control-title">Luz e cinema</div>
                 <label class="control-row">Sol X <span data-value-for="sunX"></span><input id="sunX" type="range" min="-10" max="10" step="0.1"></label>
                 <label class="control-row">Sol Y <span data-value-for="sunY"></span><input id="sunY" type="range" min="-4" max="6" step="0.1"></label>
@@ -455,8 +470,12 @@
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
         import SimplexNoise from 'simplex-noise';
         import { DinoLifeSystem } from './js/dino-life.js';
+        import { UniverseExpansion } from './js/universe-expansion.js';
 
         const PLANET_RADIUS = 10;
 
@@ -478,6 +497,84 @@
         renderer.toneMappingExposure = 1.1;
         renderer.shadowMap.enabled = true; // sombras para estrelas? não essencial mas elegante
         document.body.appendChild(renderer.domElement);
+
+        const blackHoleLensShader = {
+            uniforms: {
+                tDiffuse: { value: null },
+                lensCount: { value: 0 },
+                lensA: { value: new THREE.Vector4(0, 0, 0, 0) },
+                lensB: { value: new THREE.Vector4(0, 0, 0, 0) },
+                resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
+                time: { value: 0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D tDiffuse;
+                uniform int lensCount;
+                uniform vec4 lensA;
+                uniform vec4 lensB;
+                uniform vec2 resolution;
+                uniform float time;
+                varying vec2 vUv;
+
+                vec2 lensWarp(vec2 uv, vec4 lens) {
+                    vec2 delta = uv - lens.xy;
+                    delta.x *= resolution.x / resolution.y;
+                    float d = length(delta);
+                    float radius = lens.z;
+                    if (d <= 0.0001 || d > radius) return uv;
+
+                    float horizon = radius * 0.18;
+                    float bend = smoothstep(radius, horizon, d);
+                    float ring = exp(-pow((d - radius * 0.35) / max(radius * 0.09, 0.001), 2.0));
+                    vec2 direction = normalize(delta);
+                    direction.x /= resolution.x / resolution.y;
+                    vec2 tangent = vec2(-direction.y, direction.x);
+                    float strength = lens.w;
+                    float radialPull = strength * bend * (0.018 / max(d, 0.022));
+                    float swirl = sin(d * 85.0 - time * 0.85) * strength * ring * 0.018;
+                    return uv - direction * radialPull + tangent * swirl;
+                }
+
+                vec3 lensGrade(vec2 uv, vec3 color, vec4 lens) {
+                    vec2 delta = uv - lens.xy;
+                    delta.x *= resolution.x / resolution.y;
+                    float d = length(delta);
+                    float radius = lens.z;
+                    if (d > radius) return color;
+
+                    float horizon = smoothstep(radius * 0.22, radius * 0.08, d);
+                    float photonRing = exp(-pow((d - radius * 0.27) / max(radius * 0.035, 0.001), 2.0));
+                    float outerShear = exp(-pow((d - radius * 0.56) / max(radius * 0.11, 0.001), 2.0));
+                    color *= 1.0 - horizon * 0.82;
+                    color += vec3(1.0, 0.58, 0.2) * photonRing * 0.28;
+                    color += vec3(0.52, 0.7, 1.0) * outerShear * 0.08;
+                    return color;
+                }
+
+                void main() {
+                    vec2 warpedUv = vUv;
+                    if (lensCount > 0) warpedUv = lensWarp(warpedUv, lensA);
+                    if (lensCount > 1) warpedUv = lensWarp(warpedUv, lensB);
+                    warpedUv = clamp(warpedUv, vec2(0.001), vec2(0.999));
+                    vec3 color = texture2D(tDiffuse, warpedUv).rgb;
+                    if (lensCount > 0) color = lensGrade(vUv, color, lensA);
+                    if (lensCount > 1) color = lensGrade(vUv, color, lensB);
+                    gl_FragColor = vec4(color, 1.0);
+                }
+            `
+        };
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const blackHoleLensPass = new ShaderPass(blackHoleLensShader);
+        composer.addPass(blackHoleLensPass);
+        composer.setSize(window.innerWidth, window.innerHeight);
 
         // Controles orbitais com suavidade
         const controls = new OrbitControls(camera, renderer.domElement);
@@ -627,6 +724,18 @@
             asteroidCount: 0,
             comets: 0,
             blackHoles: 0,
+            cosmicBlackHolesEnabled: true,
+            cosmicCometsEnabled: true,
+            cosmicNebulasEnabled: true,
+            cosmicStationsEnabled: true,
+            cosmicPlanetsEnabled: true,
+            cosmicOrbitLinesEnabled: true,
+            cosmicLensDistortionEnabled: true,
+            cosmicCometCount: 3,
+            cosmicCometTailIntensity: 1.25,
+            cosmicPlanetCount: 4,
+            cosmicStationCount: 2,
+            cosmicBlackHoleCount: 1,
             sunX: -7.5,
             sunY: 3.2,
             lightIntensity: 1.45,
@@ -655,6 +764,12 @@
             spriteBasePath: './sprites/',
             settings: editorState
         });
+        const universeExpansion = new UniverseExpansion({
+            THREE,
+            parentGroup: cosmicGroup,
+            camera,
+            planetRadius: PLANET_RADIUS
+        });
 
         const planetPresets = {
             earth: { objectType: 'terrestrial', waterLevel: 0.36, mountainIntensity: 1, deformation: 0.9, stormIntensity: 0.7, cloudsEnabled: true, cloudOpacity: 0.28, atmosphereIntensity: 0.12, atmosphereColor: '#77baff', ringsEnabled: false, moonsEnabled: true, moonCount: 1, rotationSpeed: 0.002 },
@@ -678,6 +793,18 @@
             'black-region': { backgroundColor: '#000006', starDensity: 0.58, starBrightness: 0.58, starSize: 0.18, nebulaEnabled: true, nebulaIntensity: 0.25, galaxyEnabled: false, distantPlanets: 0, asteroidCount: 25, comets: 0, blackHoles: 1, lightIntensity: 0.95, ambientIntensity: 0.12, exposure: 0.92 },
             minimal: { backgroundColor: '#010107', starDensity: 0.22, starBrightness: 0.38, starSize: 0.14, nebulaEnabled: false, nebulaIntensity: 0, galaxyEnabled: false, distantPlanets: 0, asteroidCount: 0, comets: 0, blackHoles: 0, lightIntensity: 1.15, ambientIntensity: 0.12, exposure: 0.95 },
             scifi: { backgroundColor: '#020018', starDensity: 1, starBrightness: 0.95, starSize: 0.32, nebulaEnabled: true, nebulaIntensity: 1, galaxyEnabled: true, distantPlanets: 3, asteroidCount: 20, comets: 1, blackHoles: 1, lightIntensity: 1.65, ambientIntensity: 0.38, exposure: 1.28 }
+        };
+
+        const cosmicSystemPresets = {
+            deep: { cosmicBlackHolesEnabled: true, cosmicCometsEnabled: true, cosmicNebulasEnabled: true, cosmicStationsEnabled: true, cosmicPlanetsEnabled: true, cosmicOrbitLinesEnabled: true, cosmicLensDistortionEnabled: true, cosmicCometCount: 2, cosmicCometTailIntensity: 1.15, cosmicPlanetCount: 4, cosmicStationCount: 2, cosmicBlackHoleCount: 1 },
+            realistic: { cosmicBlackHolesEnabled: false, cosmicCometsEnabled: true, cosmicNebulasEnabled: false, cosmicStationsEnabled: true, cosmicPlanetsEnabled: true, cosmicOrbitLinesEnabled: true, cosmicLensDistortionEnabled: true, cosmicCometCount: 1, cosmicCometTailIntensity: 0.9, cosmicPlanetCount: 5, cosmicStationCount: 1, cosmicBlackHoleCount: 0 },
+            nebula: { cosmicBlackHolesEnabled: true, cosmicCometsEnabled: true, cosmicNebulasEnabled: true, cosmicStationsEnabled: true, cosmicPlanetsEnabled: true, cosmicOrbitLinesEnabled: false, cosmicLensDistortionEnabled: true, cosmicCometCount: 4, cosmicCometTailIntensity: 1.55, cosmicPlanetCount: 3, cosmicStationCount: 2, cosmicBlackHoleCount: 1 },
+            galaxy: { cosmicBlackHolesEnabled: true, cosmicCometsEnabled: true, cosmicNebulasEnabled: true, cosmicStationsEnabled: true, cosmicPlanetsEnabled: true, cosmicOrbitLinesEnabled: true, cosmicLensDistortionEnabled: true, cosmicCometCount: 2, cosmicCometTailIntensity: 1.2, cosmicPlanetCount: 5, cosmicStationCount: 2, cosmicBlackHoleCount: 1 },
+            asteroids: { cosmicBlackHolesEnabled: false, cosmicCometsEnabled: true, cosmicNebulasEnabled: false, cosmicStationsEnabled: true, cosmicPlanetsEnabled: true, cosmicOrbitLinesEnabled: true, cosmicLensDistortionEnabled: true, cosmicCometCount: 3, cosmicCometTailIntensity: 1.1, cosmicPlanetCount: 3, cosmicStationCount: 1, cosmicBlackHoleCount: 0 },
+            'star-orbit': { cosmicBlackHolesEnabled: false, cosmicCometsEnabled: true, cosmicNebulasEnabled: true, cosmicStationsEnabled: true, cosmicPlanetsEnabled: true, cosmicOrbitLinesEnabled: true, cosmicLensDistortionEnabled: true, cosmicCometCount: 2, cosmicCometTailIntensity: 1.0, cosmicPlanetCount: 6, cosmicStationCount: 2, cosmicBlackHoleCount: 0 },
+            'black-region': { cosmicBlackHolesEnabled: true, cosmicCometsEnabled: false, cosmicNebulasEnabled: true, cosmicStationsEnabled: false, cosmicPlanetsEnabled: false, cosmicOrbitLinesEnabled: false, cosmicLensDistortionEnabled: true, cosmicCometCount: 0, cosmicCometTailIntensity: 1, cosmicPlanetCount: 0, cosmicStationCount: 0, cosmicBlackHoleCount: 2 },
+            minimal: { cosmicBlackHolesEnabled: false, cosmicCometsEnabled: false, cosmicNebulasEnabled: false, cosmicStationsEnabled: false, cosmicPlanetsEnabled: false, cosmicOrbitLinesEnabled: false, cosmicLensDistortionEnabled: false, cosmicCometCount: 0, cosmicCometTailIntensity: 0.7, cosmicPlanetCount: 0, cosmicStationCount: 0, cosmicBlackHoleCount: 0 },
+            scifi: { cosmicBlackHolesEnabled: true, cosmicCometsEnabled: true, cosmicNebulasEnabled: true, cosmicStationsEnabled: true, cosmicPlanetsEnabled: true, cosmicOrbitLinesEnabled: true, cosmicLensDistortionEnabled: true, cosmicCometCount: 5, cosmicCometTailIntensity: 1.8, cosmicPlanetCount: 6, cosmicStationCount: 3, cosmicBlackHoleCount: 1 }
         };
 
         const artThemes = [
@@ -804,6 +931,7 @@
 
         function clearCosmicGroup() {
             dinoLife.clearPopulation();
+            universeExpansion.dispose();
             orbitingObjects.length = 0;
             slowSpinners.length = 0;
             while (planetSurfaceGroup.children.length) {
@@ -1408,6 +1536,7 @@
             createAsteroidField(random, editorState.asteroidCount);
             for (let i = 0; i < editorState.comets; i++) createComet(random);
             for (let i = 0; i < editorState.blackHoles; i++) createBlackHole(random);
+            universeExpansion.rebuild(seed, editorState);
             createCloudLayer(seed, profile);
             if (random() < 0.45) createAurora(profile);
         }
@@ -1793,6 +1922,7 @@
         // Função para randomizar completamente o planeta
         const controlIds = Object.keys(editorState);
         const dinoControlKeys = ['lifeEnabled', 'lifeType', 'dinoSpecies', 'dinoCount', 'dinoScale', 'dinoMoveSpeed', 'dinoRenderDistance', 'dinoAnimateDistance'];
+        const cosmicControlKeys = ['cosmicBlackHolesEnabled', 'cosmicCometsEnabled', 'cosmicNebulasEnabled', 'cosmicStationsEnabled', 'cosmicPlanetsEnabled', 'cosmicOrbitLinesEnabled', 'cosmicLensDistortionEnabled', 'cosmicCometCount', 'cosmicCometTailIntensity', 'cosmicPlanetCount', 'cosmicStationCount', 'cosmicBlackHoleCount'];
         let regenerateTimer = null;
 
         function syncControlsFromState() {
@@ -1843,6 +1973,7 @@
             currentThemeName = 'Manual';
             const universeSnapshot = {};
             Object.keys(universePresets.deep).forEach((key) => universeSnapshot[key] = editorState[key]);
+            cosmicControlKeys.forEach((key) => universeSnapshot[key] = editorState[key]);
             universeSnapshot.universePreset = editorState.universePreset;
             const dinoSnapshot = {};
             dinoControlKeys.forEach((key) => dinoSnapshot[key] = editorState[key]);
@@ -1855,6 +1986,7 @@
         function applyUniversePreset(name) {
             currentThemeName = 'Manual';
             Object.assign(editorState, universePresets[name] || universePresets.deep);
+            Object.assign(editorState, cosmicSystemPresets[name] || cosmicSystemPresets.deep);
             editorState.universePreset = name;
             syncControlsFromState();
             scheduleRegenerate(40);
@@ -1869,6 +2001,7 @@
             Object.assign(editorState, dinoSnapshot);
             Object.assign(editorState, planetPresets[theme.planetPreset] || planetPresets.earth);
             Object.assign(editorState, universePresets[theme.universePreset] || universePresets.deep);
+            Object.assign(editorState, cosmicSystemPresets[theme.universePreset] || cosmicSystemPresets.deep);
             editorState.planetPreset = theme.planetPreset;
             editorState.universePreset = theme.universePreset;
             applyThemeValues(editorState, theme.planet, random);
@@ -1911,6 +2044,7 @@
                     if (['starDensity', 'starBrightness', 'starSize', 'backgroundColor', 'ambientIntensity', 'exposure'].includes(key)) {
                         applyLiveEnvironmentSettings();
                     }
+                    if (key === 'cosmicLensDistortionEnabled') return;
                     scheduleRegenerate(key === 'rotationSpeed' ? 260 : 160);
                 });
             });
@@ -2012,9 +2146,15 @@
             nebulaRing.rotation.z += 0.0004;
             nebulaRing.rotation.x += 0.0002;
             dinoLife.update(deltaTime);
+            universeExpansion.update(deltaTime, time);
             
             controls.update(); // atualiza se houver interação
-            renderer.render(scene, camera);
+            const lensData = editorState.cosmicLensDistortionEnabled ? universeExpansion.collectLensData(2) : [];
+            blackHoleLensPass.uniforms.lensCount.value = lensData.length;
+            blackHoleLensPass.uniforms.lensA.value.set(lensData[0]?.x || 0, lensData[0]?.y || 0, lensData[0]?.radius || 0, lensData[0]?.strength || 0);
+            blackHoleLensPass.uniforms.lensB.value.set(lensData[1]?.x || 0, lensData[1]?.y || 0, lensData[1]?.radius || 0, lensData[1]?.strength || 0);
+            blackHoleLensPass.uniforms.time.value = time;
+            composer.render(deltaTime);
         }
         
         animate();
@@ -2025,6 +2165,8 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            composer.setSize(window.innerWidth, window.innerHeight);
+            blackHoleLensPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
         }
         
         // Tooltip inicial sutil
