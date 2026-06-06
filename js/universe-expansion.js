@@ -18,6 +18,8 @@ function pick(random, values) {
 }
 
 function disposeNode(node) {
+    if (!node) return;
+    node.parent?.remove(node);
     const geometries = new Set();
     const materials = new Set();
     const textures = new Set();

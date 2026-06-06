@@ -1,10 +1,20 @@
 function disposeObject(object) {
+    if (!object) return;
+    object.parent?.remove(object);
+    const geometries = new Set();
+    const materials = new Set();
     object.traverse((child) => {
-        if (child.geometry && !child.userData?.sharedChaosResources) child.geometry.dispose();
+        if (child.geometry && !child.userData?.sharedChaosResources) geometries.add(child.geometry);
         if (!child.material) return;
-        const materials = Array.isArray(child.material) ? child.material : [child.material];
-        if (!child.userData?.sharedChaosResources) materials.forEach((material) => material.dispose());
+        const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+        if (!child.userData?.sharedChaosResources) {
+            childMaterials.forEach((material) => {
+                if (material) materials.add(material);
+            });
+        }
     });
+    geometries.forEach((geometry) => geometry.dispose?.());
+    materials.forEach((material) => material.dispose?.());
 }
 
 function randomUnit(THREE) {

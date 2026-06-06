@@ -55,23 +55,38 @@ function fbm(normal, seed) {
 }
 
 function disposeObject(object) {
+    if (!object) return;
+    object.parent?.remove(object);
+    const geometries = new Set();
+    const materials = new Set();
+    const textures = new Set();
     object.traverse((child) => {
-        if (child.geometry) child.geometry.dispose();
+        if (child.geometry) geometries.add(child.geometry);
         if (!child.material) return;
-        const materials = Array.isArray(child.material) ? child.material : [child.material];
-        materials.forEach((material) => material.dispose());
+        const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+        childMaterials.forEach((material) => {
+            if (!material) return;
+            materials.add(material);
+            Object.keys(material).forEach((key) => {
+                const value = material[key];
+                if (value?.isTexture) textures.add(value);
+            });
+        });
     });
+    geometries.forEach((geometry) => geometry.dispose?.());
+    textures.forEach((texture) => texture.dispose?.());
+    materials.forEach((material) => material.dispose?.());
 }
 
 const PRESET_LIMITS = {
-    low: { trees: 90, plants: 170, patches: 220, stride: 3, renderDistance: 34, wind: false },
-    medium: { trees: 170, plants: 320, patches: 360, stride: 2, renderDistance: 48, wind: true },
-    high: { trees: 270, plants: 520, patches: 520, stride: 1, renderDistance: 62, wind: true },
-    cinematic: { trees: 380, plants: 760, patches: 700, stride: 1, renderDistance: 78, wind: true }
+    low: { trees: 130, plants: 240, patches: 280, stride: 2, renderDistance: 40, wind: false },
+    medium: { trees: 230, plants: 430, patches: 460, stride: 2, renderDistance: 54, wind: true },
+    high: { trees: 340, plants: 680, patches: 660, stride: 1, renderDistance: 70, wind: true },
+    cinematic: { trees: 500, plants: 980, patches: 880, stride: 1, renderDistance: 88, wind: true }
 };
 
 const DENSITY_SCALE = {
-    low: 0.55,
+    low: 0.78,
     medium: 1,
     high: 1.55,
     ultra: 2.05,
@@ -202,6 +217,100 @@ const BIOME_VEGETATION_RULES = {
     }
 };
 
+const VARIETY_LEVELS = {
+    low: { limit: 2, rare: 0.02, density: 0.82 },
+    medium: { limit: 4, rare: 0.08, density: 1 },
+    high: { limit: 7, rare: 0.16, density: 1.12 },
+    cinematic: { limit: 99, rare: 0.28, density: 1.24 }
+};
+
+const BIOME_SPECIES_RULES = {
+    tropical: {
+        trees: ['palm', 'broadleafTall', 'denseCanopy', 'roundCanopy', 'mangrove'],
+        plants: ['fern', 'bush', 'grassPatch', 'flower', 'smallMushroom']
+    },
+    temperate: {
+        trees: ['roundCanopy', 'ovalCanopy', 'wideTree', 'smallCanopyTall', 'crookedTree', 'deadTree'],
+        plants: ['grassPatch', 'bush', 'flower', 'smallMushroom', 'moss']
+    },
+    savanna: {
+        trees: ['acacia', 'wideSparseTree', 'dryTwistedTree', 'deadTree'],
+        plants: ['dryGrass', 'dryBush', 'smallCactus', 'grassPatch']
+    },
+    desert: {
+        trees: ['cactus', 'dryTwistedTree', 'deadTree', 'burntTrunk'],
+        plants: ['dryGrass', 'dryBush', 'smallCactus']
+    },
+    tundra: {
+        trees: ['smallPine', 'snowyPine', 'smallResistantTree'],
+        plants: ['moss', 'lowBush', 'dryGrass']
+    },
+    swamp: {
+        trees: ['mangrove', 'denseCanopy', 'broadleafTall', 'crookedTree'],
+        plants: ['fern', 'moss', 'bush', 'smallMushroom']
+    },
+    volcanic: {
+        trees: ['deadTree', 'burntTrunk', 'dryTwistedTree'],
+        plants: ['charredBush', 'dryGrass']
+    },
+    alien: {
+        trees: ['glowingTree', 'giantMushroom', 'crystalPlant', 'strangeCanopy', 'plantTentacle'],
+        plants: ['glowingBush', 'alienGrass', 'smallMushroom', 'smallCrystal']
+    },
+    crystal: {
+        trees: ['crystalPlant', 'glowingTree', 'strangeCanopy'],
+        plants: ['smallCrystal', 'glowingBush', 'alienGrass']
+    },
+    fungus: {
+        trees: ['giantMushroom', 'glowingTree', 'strangeCanopy'],
+        plants: ['smallMushroom', 'glowingBush', 'moss']
+    }
+};
+
+const TREE_SPECIES = {
+    roundCanopy: { family: 'temperate', trunk: 'trunk', crown: 'roundCrown', scale: [0.84, 1.16], trunkHeight: 1.04, crownRadius: 0.78, crownHeight: 0.78, crownLift: 0.82 },
+    ovalCanopy: { family: 'temperate', trunk: 'trunk', crown: 'ovalCrown', scale: [0.74, 1.08], trunkHeight: 1.08, crownRadius: 0.62, crownHeight: 1.04, crownLift: 0.9 },
+    wideTree: { family: 'temperate', trunk: 'trunk', crown: 'wideCrown', scale: [0.68, 1], trunkHeight: 0.72, crownRadius: 1.05, crownHeight: 0.58, crownLift: 0.66 },
+    smallCanopyTall: { family: 'temperate', trunk: 'slimTrunk', crown: 'roundCrown', scale: [0.82, 1.22], trunkHeight: 1.45, crownRadius: 0.46, crownHeight: 0.54, crownLift: 1.1 },
+    crookedTree: { family: 'temperate', trunk: 'trunk', crown: 'ovalCrown', scale: [0.66, 1.05], trunkHeight: 1.0, crownRadius: 0.58, crownHeight: 0.72, crownLift: 0.82, tilt: 0.16 },
+    pineRare: { family: 'cold', trunk: 'slimTrunk', crown: 'pineCrown', scale: [0.72, 1.08], trunkHeight: 1.0, crownRadius: 0.66, crownHeight: 1.1, crownLift: 0.88 },
+    palm: { family: 'tropical', trunk: 'slimTrunk', crown: 'palmCrown', scale: [0.88, 1.34], trunkHeight: 1.72, crownRadius: 0.8, crownHeight: 0.34, crownLift: 1.35, tilt: 0.1 },
+    broadleafTall: { family: 'tropical', trunk: 'trunk', crown: 'wideCrown', scale: [0.95, 1.42], trunkHeight: 1.34, crownRadius: 1, crownHeight: 0.82, crownLift: 1.05 },
+    denseCanopy: { family: 'tropical', trunk: 'trunk', crown: 'denseCrown', scale: [0.9, 1.34], trunkHeight: 1.04, crownRadius: 0.9, crownHeight: 0.9, crownLift: 0.88 },
+    mangrove: { family: 'tropical', trunk: 'mangroveTrunk', crown: 'wideCrown', scale: [0.72, 1.08], trunkHeight: 0.92, crownRadius: 0.82, crownHeight: 0.62, crownLift: 0.72, tilt: 0.08 },
+    acacia: { family: 'arid', trunk: 'trunk', crown: 'flatCrown', scale: [0.66, 1.08], trunkHeight: 0.92, crownRadius: 1.05, crownHeight: 0.36, crownLift: 0.78, tilt: 0.08 },
+    wideSparseTree: { family: 'arid', trunk: 'slimTrunk', crown: 'flatCrown', scale: [0.52, 0.88], trunkHeight: 0.72, crownRadius: 0.78, crownHeight: 0.3, crownLift: 0.6 },
+    dryTwistedTree: { family: 'arid', trunk: 'dryTrunk', crown: 'deadBranch', scale: [0.5, 0.84], trunkHeight: 0.84, crownRadius: 0.52, crownHeight: 0.34, crownLift: 0.72, tilt: 0.18, dead: true },
+    cactus: { family: 'arid', trunk: 'cactusColumn', crown: 'cactusArm', scale: [0.7, 1.18], trunkHeight: 1.24, crownRadius: 0.42, crownHeight: 0.48, crownLift: 0.7, noCrownColor: true },
+    deadTree: { family: 'dead', trunk: 'dryTrunk', crown: 'deadBranch', scale: [0.48, 0.95], trunkHeight: 1.04, crownRadius: 0.62, crownHeight: 0.42, crownLift: 0.82, dead: true, tilt: 0.12 },
+    burntTrunk: { family: 'dead', trunk: 'burntTrunk', crown: null, scale: [0.4, 0.82], trunkHeight: 0.86, crownRadius: 0, crownHeight: 0, crownLift: 0, dead: true, burned: true },
+    smallPine: { family: 'cold', trunk: 'slimTrunk', crown: 'pineCrown', scale: [0.46, 0.82], trunkHeight: 0.78, crownRadius: 0.52, crownHeight: 0.96, crownLift: 0.64 },
+    snowyPine: { family: 'cold', trunk: 'slimTrunk', crown: 'snowyPineCrown', scale: [0.46, 0.86], trunkHeight: 0.82, crownRadius: 0.54, crownHeight: 1.0, crownLift: 0.66 },
+    smallResistantTree: { family: 'cold', trunk: 'trunk', crown: 'roundCrown', scale: [0.36, 0.68], trunkHeight: 0.6, crownRadius: 0.5, crownHeight: 0.44, crownLift: 0.52 },
+    glowingTree: { family: 'alien', trunk: 'darkTrunk', crown: 'glowCrown', scale: [0.76, 1.28], trunkHeight: 1.16, crownRadius: 0.72, crownHeight: 0.82, crownLift: 0.92, emissive: true },
+    giantMushroom: { family: 'alien', trunk: 'mushroomStem', crown: 'mushroomCap', scale: [0.64, 1.18], trunkHeight: 0.88, crownRadius: 0.9, crownHeight: 0.38, crownLift: 0.72, emissive: true },
+    crystalPlant: { family: 'alien', trunk: 'crystalStem', crown: 'crystalShard', scale: [0.58, 1.08], trunkHeight: 0.44, crownRadius: 0.64, crownHeight: 0.9, crownLift: 0.48, emissive: true },
+    strangeCanopy: { family: 'alien', trunk: 'darkTrunk', crown: 'strangeCrown', scale: [0.7, 1.22], trunkHeight: 1.0, crownRadius: 0.78, crownHeight: 0.72, crownLift: 0.86, tilt: 0.08, emissive: true },
+    plantTentacle: { family: 'alien', trunk: 'tentacleStem', crown: 'glowCrown', scale: [0.48, 0.92], trunkHeight: 1.05, crownRadius: 0.36, crownHeight: 0.38, crownLift: 0.98, tilt: 0.2, emissive: true }
+};
+
+const PLANT_SPECIES = {
+    grassPatch: { mesh: 'grassPatch', scale: [0.22, 0.42], y: 0.38 },
+    bush: { mesh: 'shrub', scale: [0.32, 0.64], y: 0.72 },
+    lowBush: { mesh: 'shrub', scale: [0.2, 0.42], y: 0.42 },
+    flower: { mesh: 'flower', scale: [0.22, 0.38], y: 0.78 },
+    fern: { mesh: 'fern', scale: [0.28, 0.56], y: 0.58 },
+    smallMushroom: { mesh: 'smallMushroom', scale: [0.18, 0.38], y: 1.0, alien: true },
+    moss: { mesh: 'moss', scale: [0.26, 0.52], y: 0.18 },
+    dryGrass: { mesh: 'dryGrass', scale: [0.22, 0.44], y: 0.34 },
+    dryBush: { mesh: 'dryBush', scale: [0.26, 0.5], y: 0.48 },
+    smallCactus: { mesh: 'smallCactus', scale: [0.22, 0.46], y: 1.0 },
+    charredBush: { mesh: 'charredBush', scale: [0.22, 0.42], y: 0.42, dead: true },
+    glowingBush: { mesh: 'glowingBush', scale: [0.28, 0.56], y: 0.72, alien: true },
+    alienGrass: { mesh: 'alienGrass', scale: [0.22, 0.46], y: 0.44, alien: true },
+    smallCrystal: { mesh: 'smallCrystal', scale: [0.24, 0.5], y: 0.82, alien: true }
+};
+
 function mix(a, b, t) {
     return a + (b - a) * clamp(t, 0, 1);
 }
@@ -273,20 +382,113 @@ export class PlanetVegetationSystem {
     createInstancedMeshes() {
         const THREE = this.THREE;
         const limits = this.getLimits();
-        const trunkGeometry = new THREE.CylinderGeometry(0.055, 0.075, 1, 5, 1);
-        const crownGeometry = new THREE.ConeGeometry(0.42, 0.95, 7, 1);
-        const shrubGeometry = new THREE.DodecahedronGeometry(0.34, 0);
-        const mushroomGeometry = new THREE.CylinderGeometry(0.18, 0.08, 0.42, 7, 1);
+        const treeCapacity = Math.max(12, limits.trees);
+        const plantCapacity = Math.max(24, limits.plants);
+        const materials = {
+            bark: new THREE.MeshStandardMaterial({ color: 0x6a4a2f, roughness: 0.9, metalness: 0.02 }),
+            dryBark: new THREE.MeshStandardMaterial({ color: 0x6f5a3d, roughness: 0.95, metalness: 0.01 }),
+            burnt: new THREE.MeshStandardMaterial({ color: 0x2f2924, roughness: 0.96, metalness: 0.02 }),
+            leaf: new THREE.MeshStandardMaterial({ color: 0x38a855, roughness: 0.84, metalness: 0.01 }),
+            snowLeaf: new THREE.MeshStandardMaterial({ color: 0xd9eef2, roughness: 0.72, metalness: 0.01 }),
+            cactus: new THREE.MeshStandardMaterial({ color: 0x3f9f63, roughness: 0.88, metalness: 0.01 }),
+            alienGlow: new THREE.MeshStandardMaterial({ color: 0x59ffd0, roughness: 0.58, metalness: 0.03, emissive: 0x23c6a3, emissiveIntensity: 0.38 }),
+            fungus: new THREE.MeshStandardMaterial({ color: 0xcaa3ff, roughness: 0.76, metalness: 0.02, emissive: 0x231044, emissiveIntensity: 0.18 }),
+            crystal: new THREE.MeshStandardMaterial({ color: 0x9de8ff, roughness: 0.34, metalness: 0.12, transparent: true, opacity: 0.78, emissive: 0x2876ff, emissiveIntensity: 0.28 }),
+            flower: new THREE.MeshStandardMaterial({ color: 0xffd166, roughness: 0.78, metalness: 0.01 })
+        };
+        const geometries = {
+            trunk: new THREE.CylinderGeometry(0.055, 0.078, 1, 5, 1),
+            slimTrunk: new THREE.CylinderGeometry(0.035, 0.065, 1, 5, 1),
+            dryTrunk: new THREE.CylinderGeometry(0.032, 0.075, 1, 5, 1),
+            burntTrunk: new THREE.CylinderGeometry(0.04, 0.07, 1, 5, 1),
+            mangroveTrunk: new THREE.CylinderGeometry(0.045, 0.1, 1, 5, 1),
+            darkTrunk: new THREE.CylinderGeometry(0.045, 0.078, 1, 6, 1),
+            cactusColumn: new THREE.CylinderGeometry(0.12, 0.12, 1, 7, 1),
+            mushroomStem: new THREE.CylinderGeometry(0.13, 0.08, 1, 8, 1),
+            crystalStem: new THREE.ConeGeometry(0.18, 1, 5, 1),
+            tentacleStem: new THREE.CylinderGeometry(0.055, 0.085, 1, 7, 1),
+            roundCrown: new THREE.DodecahedronGeometry(0.54, 0),
+            ovalCrown: new THREE.SphereGeometry(0.48, 8, 6),
+            wideCrown: new THREE.SphereGeometry(0.52, 8, 5),
+            denseCrown: new THREE.IcosahedronGeometry(0.56, 0),
+            pineCrown: new THREE.ConeGeometry(0.48, 1, 7, 1),
+            snowyPineCrown: new THREE.ConeGeometry(0.5, 1, 7, 1),
+            palmCrown: new THREE.ConeGeometry(0.62, 0.28, 9, 1),
+            flatCrown: new THREE.CylinderGeometry(0.58, 0.7, 0.32, 8, 1),
+            deadBranch: new THREE.ConeGeometry(0.5, 0.34, 5, 1),
+            cactusArm: new THREE.CylinderGeometry(0.08, 0.08, 1, 7, 1),
+            glowCrown: new THREE.IcosahedronGeometry(0.54, 0),
+            mushroomCap: new THREE.SphereGeometry(0.62, 9, 5),
+            crystalShard: new THREE.OctahedronGeometry(0.62, 0),
+            strangeCrown: new THREE.TorusKnotGeometry(0.34, 0.12, 24, 5),
+            shrub: new THREE.DodecahedronGeometry(0.34, 0),
+            grassPatch: new THREE.ConeGeometry(0.24, 0.42, 5, 1),
+            flower: new THREE.ConeGeometry(0.2, 0.34, 6, 1),
+            fern: new THREE.ConeGeometry(0.28, 0.5, 7, 1),
+            smallMushroom: new THREE.CylinderGeometry(0.18, 0.08, 0.42, 7, 1),
+            moss: new THREE.SphereGeometry(0.28, 7, 4),
+            dryGrass: new THREE.ConeGeometry(0.2, 0.38, 5, 1),
+            dryBush: new THREE.DodecahedronGeometry(0.28, 0),
+            smallCactus: new THREE.CylinderGeometry(0.12, 0.1, 0.55, 7, 1),
+            charredBush: new THREE.DodecahedronGeometry(0.25, 0),
+            glowingBush: new THREE.IcosahedronGeometry(0.3, 0),
+            alienGrass: new THREE.ConeGeometry(0.22, 0.46, 6, 1),
+            smallCrystal: new THREE.OctahedronGeometry(0.32, 0)
+        };
 
-        const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x6a4a2f, roughness: 0.88, metalness: 0.02 });
-        const crownMaterial = new THREE.MeshStandardMaterial({ color: 0x2f9b48, roughness: 0.82, metalness: 0.01 });
-        const shrubMaterial = new THREE.MeshStandardMaterial({ color: 0x50b85b, roughness: 0.86, metalness: 0.0 });
-        const mushroomMaterial = new THREE.MeshStandardMaterial({ color: 0xdcc4ff, roughness: 0.74, metalness: 0.02, emissive: 0x1d0f2a, emissiveIntensity: 0.12 });
+        const meshDefs = {
+            trunk: ['trunk', 'bark', treeCapacity],
+            slimTrunk: ['slimTrunk', 'bark', treeCapacity],
+            dryTrunk: ['dryTrunk', 'dryBark', treeCapacity],
+            burntTrunk: ['burntTrunk', 'burnt', treeCapacity],
+            mangroveTrunk: ['mangroveTrunk', 'bark', treeCapacity],
+            darkTrunk: ['darkTrunk', 'burnt', treeCapacity],
+            cactusColumn: ['cactusColumn', 'cactus', treeCapacity],
+            mushroomStem: ['mushroomStem', 'fungus', treeCapacity],
+            crystalStem: ['crystalStem', 'crystal', treeCapacity],
+            tentacleStem: ['tentacleStem', 'alienGlow', treeCapacity],
+            roundCrown: ['roundCrown', 'leaf', treeCapacity],
+            ovalCrown: ['ovalCrown', 'leaf', treeCapacity],
+            wideCrown: ['wideCrown', 'leaf', treeCapacity],
+            denseCrown: ['denseCrown', 'leaf', treeCapacity],
+            pineCrown: ['pineCrown', 'leaf', treeCapacity],
+            snowyPineCrown: ['snowyPineCrown', 'snowLeaf', treeCapacity],
+            palmCrown: ['palmCrown', 'leaf', treeCapacity],
+            flatCrown: ['flatCrown', 'leaf', treeCapacity],
+            deadBranch: ['deadBranch', 'dryBark', treeCapacity],
+            cactusArm: ['cactusArm', 'cactus', treeCapacity],
+            glowCrown: ['glowCrown', 'alienGlow', treeCapacity],
+            mushroomCap: ['mushroomCap', 'fungus', treeCapacity],
+            crystalShard: ['crystalShard', 'crystal', treeCapacity],
+            strangeCrown: ['strangeCrown', 'alienGlow', treeCapacity],
+            shrub: ['shrub', 'leaf', plantCapacity],
+            grassPatch: ['grassPatch', 'leaf', plantCapacity],
+            flower: ['flower', 'flower', plantCapacity],
+            fern: ['fern', 'leaf', plantCapacity],
+            smallMushroom: ['smallMushroom', 'fungus', plantCapacity],
+            moss: ['moss', 'leaf', plantCapacity],
+            dryGrass: ['dryGrass', 'dryBark', plantCapacity],
+            dryBush: ['dryBush', 'dryBark', plantCapacity],
+            smallCactus: ['smallCactus', 'cactus', plantCapacity],
+            charredBush: ['charredBush', 'burnt', plantCapacity],
+            glowingBush: ['glowingBush', 'alienGlow', plantCapacity],
+            alienGrass: ['alienGrass', 'alienGlow', plantCapacity],
+            smallCrystal: ['smallCrystal', 'crystal', plantCapacity]
+        };
 
-        this.meshes.trunk = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, limits.trees);
-        this.meshes.crown = new THREE.InstancedMesh(crownGeometry, crownMaterial, limits.trees);
-        this.meshes.shrub = new THREE.InstancedMesh(shrubGeometry, shrubMaterial, limits.plants);
-        this.meshes.mushroom = new THREE.InstancedMesh(mushroomGeometry, mushroomMaterial, Math.floor(limits.plants * 0.34));
+        Object.entries(meshDefs).forEach(([key, [geometryKey, materialKey, capacity]]) => {
+            const geometry = geometries[geometryKey];
+            const baseMaterial = materials[materialKey];
+            if (!this.isValidRenderableGeometry(geometry) || !baseMaterial) {
+                console.warn('Tipo de vegetacao com geometria/material invalido:', key, geometryKey, materialKey, geometry, baseMaterial);
+                geometry?.dispose?.();
+                return;
+            }
+            const material = baseMaterial.clone();
+            this.meshes[key] = new THREE.InstancedMesh(geometry, material, capacity);
+            this.initializeInstancedColor(this.meshes[key], capacity);
+        });
+        Object.values(materials).forEach((material) => material.dispose());
 
         Object.values(this.meshes).forEach((mesh) => {
             mesh.count = 0;
@@ -297,6 +499,19 @@ export class PlanetVegetationSystem {
             this.group.add(mesh);
         });
         this.createDebugTreeLines();
+    }
+
+    isValidRenderableGeometry(geometry) {
+        const position = geometry?.attributes?.position;
+        return Boolean(geometry && geometry.attributes && position && position.array);
+    }
+
+    initializeInstancedColor(mesh, capacity) {
+        const THREE = this.THREE;
+        const colors = new Float32Array(Math.max(1, capacity) * 3);
+        for (let i = 0; i < colors.length; i++) colors[i] = 1;
+        mesh.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
+        mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     }
 
     createDebugTreeLines() {
@@ -380,24 +595,35 @@ export class PlanetVegetationSystem {
     getLimits() {
         const preset = PRESET_LIMITS[this.settings.vegetationQuality] || PRESET_LIMITS[this.settings.graphicsPreset] || PRESET_LIMITS.medium;
         const density = DENSITY_SCALE[this.settings.vegetationDensity] || 1;
+        const variety = this.getVarietyProfile();
         const renderDistance = Number(this.settings.vegetationRenderDistance || preset.renderDistance);
         return {
-            trees: Math.max(12, Math.floor(preset.trees * density)),
-            plants: Math.max(24, Math.floor(preset.plants * density)),
-            patches: Math.max(64, Math.floor(preset.patches * density)),
+            trees: Math.max(12, Math.floor(preset.trees * density * variety.density)),
+            plants: Math.max(24, Math.floor(preset.plants * density * variety.density)),
+            patches: Math.max(64, Math.floor(preset.patches * density * variety.density)),
             stride: preset.stride,
             renderDistance,
             wind: preset.wind
         };
     }
 
+    getVarietyProfile() {
+        const named = this.settings.vegetationVarietyLevel;
+        if (VARIETY_LEVELS[named]) return VARIETY_LEVELS[named];
+        const numeric = Number(this.settings.vegetationBiomeVariety || 1);
+        if (numeric < 0.72) return VARIETY_LEVELS.low;
+        if (numeric > 1.32) return VARIETY_LEVELS.cinematic;
+        if (numeric > 1.08) return VARIETY_LEVELS.high;
+        return VARIETY_LEVELS.medium;
+    }
+
     generateVegetationInstances() {
         const THREE = this.THREE;
         const seed = this.planetData.seed || 1;
         const random = createSeededRandom(seed + 7301);
-        const radius = this.getPlanetRadius();
         const limits = this.getLimits();
-        const desired = limits.trees + limits.plants;
+        const lowPlantsEnabled = this.settings.vegetationLowPlantsEnabled !== false;
+        const desired = limits.trees + (lowPlantsEnabled ? limits.plants : 0);
         const maxAttempts = desired * 7;
         let accepted = 0;
         let treeCount = 0;
@@ -408,15 +634,20 @@ export class PlanetVegetationSystem {
             const biome = this.evaluateBiome(normal);
             if (biome.density <= 0.035 || random() > biome.density) continue;
             const type = this.pickVegetationType(biome, random);
+            if (type !== 'tree' && !lowPlantsEnabled) continue;
             if (type === 'tree' && treeCount >= limits.trees) continue;
             if (type !== 'tree' && plantCount >= limits.plants) continue;
+            const species = this.pickSpeciesForType(type, biome, random);
+            if (!species) continue;
             const height = this.getPlanetSurfaceHeight(normal);
             const chunkId = this.chunkIdForNormal(normal);
+            const speciesDef = type === 'tree' ? TREE_SPECIES[species] : PLANT_SPECIES[species];
             const instance = {
                 normal: normal.clone(),
                 height,
                 chunkId,
                 type,
+                species,
                 biome: biome.name,
                 color: biome.color.clone(),
                 random: random(),
@@ -424,7 +655,7 @@ export class PlanetVegetationSystem {
                 scale: this.scaleForType(type, random, biome),
                 growth: this.settings.vegetationGrowthEnabled ? random() * 0.22 : 1,
                 targetGrowth: 0.86 + random() * 0.22,
-                state: biome.rule.burned ? 'burned' : 'alive',
+                state: biome.rule.burned || speciesDef?.burned ? 'burned' : 'alive',
                 scenic: biome.scenic,
                 density: biome.density,
                 windPhase: random() * Math.PI * 2
@@ -639,11 +870,47 @@ export class PlanetVegetationSystem {
         const rule = biome.rule || this.getVegetationRulesForBiome(biome.name);
         const scenicTreeBoost = biome.scenic?.forest ? biome.scenic.forest * 0.16 : 0;
         const openPenalty = biome.scenic?.clearing ? biome.scenic.clearing * 0.18 : 0;
-        const mushroomChance = clamp(rule.mushroomChance * (biome.name === 'swamp' ? 1.18 : 1), 0, 0.82);
+        const lowPlantsEnabled = this.settings.vegetationLowPlantsEnabled !== false;
+        const mushroomChance = lowPlantsEnabled ? clamp(rule.mushroomChance * (biome.name === 'swamp' ? 1.18 : 1), 0, 0.82) : 0;
         const roll = random();
-        if (roll < mushroomChance) return 'mushroom';
+        if (roll < mushroomChance) return 'plant';
         if (roll < mushroomChance + clamp(rule.treeChance + scenicTreeBoost - openPenalty, 0.02, 0.86)) return 'tree';
-        return 'shrub';
+        return lowPlantsEnabled ? 'plant' : 'tree';
+    }
+
+    pickSpeciesForType(type, biome, random) {
+        const rules = BIOME_SPECIES_RULES[biome.name] || BIOME_SPECIES_RULES.temperate;
+        const secondaryRules = BIOME_SPECIES_RULES[biome.secondaryName] || rules;
+        const poolKey = type === 'tree' ? 'trees' : 'plants';
+        let pool = [...(rules[poolKey] || []), ...(random() < biome.blend ? (secondaryRules[poolKey] || []) : [])];
+        if (type === 'tree' && biome.name === 'temperate' && random() < 0.08) pool.push('pineRare');
+        pool = this.filterSpeciesPool(pool, type);
+        if (!pool.length && type !== 'tree') pool = this.filterSpeciesPool(['grassPatch', 'bush'], type);
+        if (!pool.length) pool = this.filterSpeciesPool(['roundCanopy'], 'tree');
+        const variety = this.getVarietyProfile();
+        const limit = Math.min(pool.length, variety.limit);
+        const commonPool = pool.slice(0, Math.max(1, limit));
+        const rareAllowed = random() < variety.rare;
+        const finalPool = rareAllowed ? pool : commonPool;
+        const weightedIndex = Math.floor(Math.pow(random(), rareAllowed ? 0.72 : 1.28) * finalPool.length);
+        return finalPool[clamp(weightedIndex, 0, finalPool.length - 1)];
+    }
+
+    filterSpeciesPool(pool, type) {
+        const catalog = type === 'tree' ? TREE_SPECIES : PLANT_SPECIES;
+        const alienEnabled = this.settings.vegetationAlienEnabled !== false;
+        const deadEnabled = this.settings.vegetationDeadEnabled !== false;
+        const fungiCrystalsEnabled = this.settings.vegetationFungiCrystalsEnabled !== false;
+        const seen = new Set();
+        return pool.filter((name) => {
+            if (seen.has(name) || !catalog[name]) return false;
+            seen.add(name);
+            const def = catalog[name];
+            if (!alienEnabled && (def.family === 'alien' || def.alien)) return false;
+            if (!deadEnabled && (def.dead || def.burned || name === 'deadTree' || name === 'burntTrunk' || name === 'charredBush')) return false;
+            if (!fungiCrystalsEnabled && /Mushroom|Crystal|crystal|fungus/i.test(name)) return false;
+            return true;
+        });
     }
 
     scaleForType(type, random, biome) {
@@ -653,7 +920,6 @@ export class PlanetVegetationSystem {
         if (type === 'tree') {
             return climateScale;
         }
-        if (type === 'mushroom') return climateScale * (biome.name === 'fungus' || biome.name === 'alien' ? 0.78 : 0.52);
         return climateScale * mix(0.38, 0.68, random());
     }
 
@@ -693,11 +959,14 @@ export class PlanetVegetationSystem {
 
         if (this.settings.vegetationWindEnabled && this.lodState === 'near') {
             const wind = Number(this.settings.vegetationWindIntensity || 0.35);
-            this.meshes.crown.rotation.z = Math.sin(this.elapsed * 1.6) * 0.006 * wind;
-            this.meshes.shrub.rotation.x = Math.cos(this.elapsed * 1.2) * 0.004 * wind;
+            ['roundCrown', 'ovalCrown', 'wideCrown', 'denseCrown', 'pineCrown', 'palmCrown', 'glowCrown', 'strangeCrown'].forEach((key) => {
+                if (this.meshes[key]) this.meshes[key].rotation.z = Math.sin(this.elapsed * 1.6 + key.length) * 0.006 * wind;
+            });
+            ['shrub', 'grassPatch', 'fern', 'flower', 'glowingBush', 'alienGrass'].forEach((key) => {
+                if (this.meshes[key]) this.meshes[key].rotation.x = Math.cos(this.elapsed * 1.2 + key.length) * 0.004 * wind;
+            });
         } else {
-            this.meshes.crown.rotation.set(0, 0, 0);
-            this.meshes.shrub.rotation.set(0, 0, 0);
+            Object.values(this.meshes).forEach((mesh) => mesh.rotation.set(0, 0, 0));
         }
 
         if (this.rebuildTimer <= 0 || previousLod !== this.lodState) {
@@ -714,62 +983,92 @@ export class PlanetVegetationSystem {
     rebuildInstanceBuffers() {
         if (!this.group) return;
         const limits = this.getLimits();
-        const counts = { tree: 0, shrub: 0, mushroom: 0 };
+        const counts = {};
         const cameraNormal = this.getCameraLocalNormal();
         const stride = this.lodState === 'near' ? 1 : Math.max(1, limits.stride);
         const debug = this.beginTreeDebugBuffer();
-        this.meshes.trunk.count = 0;
-        this.meshes.crown.count = 0;
-        this.meshes.shrub.count = 0;
-        this.meshes.mushroom.count = 0;
+        Object.keys(this.meshes).forEach((key) => {
+            counts[key] = 0;
+            this.meshes[key].count = 0;
+        });
 
         this.instances.forEach((instance, index) => {
             if (instance.state === 'removed') return;
             if (this.lodState === 'medium' && index % stride !== 0) return;
             if (this.lodState !== 'near' && instance.normal.dot(cameraNormal) < -0.08) return;
             if (instance.type === 'tree') {
-                if (counts.tree >= this.meshes.trunk.instanceMatrix.count) return;
-                this.writeTreeInstance(instance, counts.tree++, debug);
-            } else if (instance.type === 'mushroom') {
-                if (counts.mushroom >= this.meshes.mushroom.instanceMatrix.count) return;
-                this.writePlantInstance(instance, this.meshes.mushroom, counts.mushroom++);
+                this.writeTreeInstance(instance, counts, debug);
             } else {
-                if (counts.shrub >= this.meshes.shrub.instanceMatrix.count) return;
-                this.writePlantInstance(instance, this.meshes.shrub, counts.shrub++);
+                this.writePlantInstance(instance, counts);
             }
         });
 
-        this.meshes.trunk.count = counts.tree;
-        this.meshes.crown.count = counts.tree;
-        this.meshes.shrub.count = counts.shrub;
-        this.meshes.mushroom.count = counts.mushroom;
-        Object.values(this.meshes).forEach((mesh) => {
+        Object.entries(this.meshes).forEach(([key, mesh]) => {
+            mesh.count = counts[key] || 0;
             mesh.instanceMatrix.needsUpdate = true;
             if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
         });
         this.endTreeDebugBuffer(debug);
     }
 
-    writeTreeInstance(instance, index, debug = null) {
+    nextMeshIndex(meshKey, counts) {
+        const mesh = this.meshes[meshKey];
+        if (!mesh) return -1;
+        const index = counts[meshKey] || 0;
+        if (index >= mesh.instanceMatrix.count) return -1;
+        counts[meshKey] = index + 1;
+        return index;
+    }
+
+    writeTreeInstance(instance, counts, debug = null) {
         const THREE = this.THREE;
         const transform = this.computeTreeTransform(instance);
-        const color = instance.state === 'burned' ? new THREE.Color(0x3c332d) : new THREE.Color(0x6f4b31);
+        const species = TREE_SPECIES[instance.species] || TREE_SPECIES.roundCanopy;
+        const trunkMesh = this.meshes[species.trunk] || this.meshes.trunk;
+        if (!trunkMesh) return;
+        const trunkIndex = this.nextMeshIndex(species.trunk || 'trunk', counts);
+        if (trunkIndex < 0) return;
+        const color = this.getTrunkColor(instance, species);
         this.tempMatrix.compose(
             transform.trunkWorldPosition,
             transform.quaternion,
             new THREE.Vector3(transform.trunkRadius, transform.trunkHeight, transform.trunkRadius)
         );
-        this.meshes.trunk.setMatrixAt(index, this.tempMatrix);
-        this.meshes.trunk.setColorAt(index, color);
+        trunkMesh.setMatrixAt(trunkIndex, this.tempMatrix);
+        trunkMesh.setColorAt(trunkIndex, color);
 
-        const crownColor = instance.state === 'burned' ? new THREE.Color(0x2c2924) : instance.color.clone().offsetHSL(0, 0.04, instance.random * 0.08 - 0.02);
-        this.tempMatrix.compose(
-            transform.canopyWorldPosition,
-            transform.quaternion,
-            new THREE.Vector3(transform.canopyRadius, transform.canopyHeight, transform.canopyRadius)
-        );
-        this.meshes.crown.setMatrixAt(index, this.tempMatrix);
-        this.meshes.crown.setColorAt(index, crownColor);
+        if (species.crown === 'cactusArm') {
+            const armMesh = this.meshes.cactusArm;
+            const armColor = this.getCrownColor(instance, species);
+            const side = transform.trunkRadius * (2.1 + instance.random * 0.7);
+            [
+                { x: side, y: transform.trunkHeight * 0.56, h: transform.trunkHeight * 0.34 },
+                { x: -side, y: transform.trunkHeight * 0.72, h: transform.trunkHeight * 0.28 }
+            ].forEach((part) => {
+                const armIndex = this.nextMeshIndex('cactusArm', counts);
+                if (!armMesh || armIndex < 0) return;
+                const local = new THREE.Vector3(part.x, part.y, 0).applyQuaternion(transform.quaternion).add(transform.basePosition);
+                this.tempMatrix.compose(
+                    local,
+                    transform.quaternion,
+                    new THREE.Vector3(transform.trunkRadius * 0.72, part.h, transform.trunkRadius * 0.72)
+                );
+                armMesh.setMatrixAt(armIndex, this.tempMatrix);
+                armMesh.setColorAt(armIndex, armColor);
+            });
+        } else if (species.crown) {
+            const crownMesh = this.meshes[species.crown];
+            const crownIndex = this.nextMeshIndex(species.crown, counts);
+            if (crownMesh && crownIndex >= 0 && transform.canopyRadius > 0.001) {
+                this.tempMatrix.compose(
+                    transform.canopyWorldPosition,
+                    transform.crownQuaternion || transform.quaternion,
+                    new THREE.Vector3(transform.canopyRadius, transform.canopyHeight, transform.canopyRadius)
+                );
+                crownMesh.setMatrixAt(crownIndex, this.tempMatrix);
+                crownMesh.setColorAt(crownIndex, this.getCrownColor(instance, species));
+            }
+        }
         this.writeTreeDebug(transform, debug);
     }
 
@@ -778,12 +1077,14 @@ export class PlanetVegetationSystem {
         const normal = instance.normal;
         const growth = this.growthScale(instance);
         const treeScale = instance.scale;
+        const species = TREE_SPECIES[instance.species] || TREE_SPECIES.roundCanopy;
+        const speciesScale = mix(species.scale?.[0] || 0.8, species.scale?.[1] || 1.1, instance.random);
         const burnedScale = instance.state === 'burned' ? 0.72 : 1;
-        const trunkHeight = Math.max(0.08, 1.22 * treeScale * growth * burnedScale);
-        const trunkRadius = Math.max(0.018, 0.12 * treeScale * (0.82 + instance.random * 0.24));
-        const canopyGrowth = instance.state === 'burned' ? 0.18 : smoothstep(0.32, 1, growth);
-        const canopyRadius = Math.max(0.035, 0.58 * treeScale * (0.9 + instance.random * 0.22) * canopyGrowth);
-        const canopyHeight = Math.max(0.04, 0.84 * treeScale * (0.9 + instance.random * 0.2) * canopyGrowth);
+        const trunkHeight = Math.max(0.08, (species.trunkHeight || 1) * treeScale * speciesScale * growth * burnedScale);
+        const trunkRadius = Math.max(0.018, 0.1 * treeScale * speciesScale * (0.82 + instance.random * 0.24) * (species.trunk === 'cactusColumn' ? 1.3 : 1));
+        const canopyGrowth = instance.state === 'burned' || species.dead ? 0.28 : smoothstep(0.32, 1, growth);
+        const canopyRadius = Math.max(0, (species.crownRadius || 0) * treeScale * speciesScale * (0.9 + instance.random * 0.22) * canopyGrowth);
+        const canopyHeight = Math.max(0, (species.crownHeight || 0) * treeScale * speciesScale * (0.9 + instance.random * 0.2) * canopyGrowth);
 
         const basePosition = this.tempTreeBase
             .copy(normal)
@@ -792,15 +1093,24 @@ export class PlanetVegetationSystem {
         this.tempSurfaceQuaternion.setFromUnitVectors(this.up, normal);
         this.tempYawQuaternion.setFromAxisAngle(normal, instance.spin);
         const quaternion = this.tempQuaternion.copy(this.tempYawQuaternion).multiply(this.tempSurfaceQuaternion);
+        if (species.tilt) {
+            const tiltAxis = new THREE.Vector3(Math.sin(instance.spin), 0, Math.cos(instance.spin)).normalize();
+            const tiltQuaternion = new THREE.Quaternion().setFromAxisAngle(tiltAxis, species.tilt * (0.4 + instance.random * 0.8));
+            quaternion.multiply(tiltQuaternion);
+        }
 
         const trunkLocalPosition = this.tempLocalPosition.set(0, trunkHeight * 0.5, 0);
         const trunkWorldPosition = trunkLocalPosition.clone().applyQuaternion(quaternion).add(basePosition);
 
-        const canopyLocalPosition = new THREE.Vector3(0, trunkHeight + canopyHeight * 0.42, 0);
+        const canopyLocalPosition = new THREE.Vector3(0, trunkHeight * (species.crownLift || 0.85) + canopyHeight * 0.42, 0);
         const canopyWorldPosition = canopyLocalPosition.clone().applyQuaternion(quaternion).add(basePosition);
 
         const topLocalPosition = new THREE.Vector3(0, trunkHeight, 0);
         const trunkTopWorldPosition = topLocalPosition.clone().applyQuaternion(quaternion).add(basePosition);
+        const crownQuaternion = quaternion.clone();
+        if (species.crown === 'flatCrown' || species.crown === 'palmCrown') {
+            crownQuaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), instance.random * Math.PI));
+        }
 
         return {
             basePosition: basePosition.clone(),
@@ -813,20 +1123,61 @@ export class PlanetVegetationSystem {
             canopyRadius,
             canopyHeight,
             quaternion: quaternion.clone(),
+            crownQuaternion,
             trunkWorldPosition,
             canopyWorldPosition,
             trunkTopWorldPosition
         };
     }
 
-    writePlantInstance(instance, mesh, index) {
+    getTrunkColor(instance, species) {
         const THREE = this.THREE;
-        const baseScale = instance.scale * this.growthScale(instance);
-        const color = instance.state === 'burned' ? new THREE.Color(0x3b352e) : instance.color.clone().offsetHSL(0.02 * instance.random, 0.05, instance.random * 0.12 - 0.03);
-        const yScale = instance.type === 'mushroom' ? 1.2 : 0.72;
+        if (instance.state === 'burned' || species.burned) return new THREE.Color(0x302923);
+        if (species.family === 'alien') return new THREE.Color(0x24302f).offsetHSL(0, 0, instance.random * 0.08);
+        if (species.trunk === 'cactusColumn') return new THREE.Color(0x3f9f63).offsetHSL(0.02 * instance.random, 0.04, instance.random * 0.06 - 0.02);
+        if (species.trunk === 'mushroomStem') return new THREE.Color(0xd7c1ef).offsetHSL(0.03 * instance.random, 0.08, instance.random * 0.08);
+        if (species.trunk === 'crystalStem') return new THREE.Color(0x91e8ff).offsetHSL(0.08 * instance.random, 0.05, instance.random * 0.08);
+        if (species.dead) return new THREE.Color(0x6c583a).offsetHSL(0, 0.03, instance.random * 0.08 - 0.03);
+        return new THREE.Color(0x6f4b31).offsetHSL(0.02 * instance.random, 0.02, instance.random * 0.07 - 0.025);
+    }
+
+    getCrownColor(instance, species) {
+        const THREE = this.THREE;
+        if (instance.state === 'burned' || species.burned) return new THREE.Color(0x2c2924);
+        if (species.dead) return new THREE.Color(0x725f3e).offsetHSL(0, 0.04, instance.random * 0.08 - 0.04);
+        if (species.crown === 'snowyPineCrown') return new THREE.Color(0xd9eef2).lerp(instance.color, 0.18);
+        if (species.crown === 'cactusArm') return new THREE.Color(0x3f9f63).offsetHSL(0.02 * instance.random, 0.04, instance.random * 0.06 - 0.02);
+        if (species.crown === 'mushroomCap') return new THREE.Color(0xc58aff).offsetHSL(0.1 * instance.random, 0.08, instance.random * 0.12 - 0.02);
+        if (species.crown === 'crystalShard') return new THREE.Color(0x8ad7ff).offsetHSL(0.12 * instance.random, 0.08, instance.random * 0.1);
+        if (species.emissive) return new THREE.Color(0x56ffd0).lerp(instance.color, 0.35).offsetHSL(0.04 * instance.random, 0.08, 0.02);
+        return instance.color.clone().offsetHSL(0.02 * instance.random, 0.05, instance.random * 0.12 - 0.03);
+    }
+
+    writePlantInstance(instance, counts) {
+        const THREE = this.THREE;
+        const species = PLANT_SPECIES[instance.species] || PLANT_SPECIES.bush;
+        const mesh = this.meshes[species.mesh] || this.meshes.shrub;
+        if (!mesh) return;
+        const index = this.nextMeshIndex(species.mesh || 'shrub', counts);
+        if (index < 0) return;
+        const speciesScale = mix(species.scale?.[0] || 0.3, species.scale?.[1] || 0.6, instance.random);
+        const baseScale = instance.scale * speciesScale * this.growthScale(instance);
+        const color = this.getPlantColor(instance, species);
+        const yScale = species.y || 0.72;
         this.composeSurfaceMatrix(instance, new THREE.Vector3(baseScale, baseScale * yScale, baseScale), baseScale * yScale * 0.5 + 0.025);
         mesh.setMatrixAt(index, this.tempMatrix);
         mesh.setColorAt(index, color);
+    }
+
+    getPlantColor(instance, species) {
+        const THREE = this.THREE;
+        if (instance.state === 'burned' || species.dead) return new THREE.Color(0x3b352e).offsetHSL(0, 0.02, instance.random * 0.06);
+        if (species.mesh === 'flower') return new THREE.Color(0xffc857).offsetHSL(0.18 * instance.random, 0.1, instance.random * 0.1);
+        if (species.mesh === 'smallMushroom') return new THREE.Color(0xd3a6ff).offsetHSL(0.1 * instance.random, 0.08, instance.random * 0.1);
+        if (species.mesh === 'smallCrystal') return new THREE.Color(0x9de8ff).offsetHSL(0.14 * instance.random, 0.08, instance.random * 0.08);
+        if (species.mesh === 'smallCactus') return new THREE.Color(0x3f9f63).offsetHSL(0.02 * instance.random, 0.04, instance.random * 0.06 - 0.02);
+        if (species.alien) return new THREE.Color(0x58ffd2).lerp(instance.color, 0.35).offsetHSL(0.06 * instance.random, 0.08, 0.02);
+        return instance.color.clone().offsetHSL(0.02 * instance.random, 0.05, instance.random * 0.12 - 0.03);
     }
 
     growthScale(instance) {
@@ -1002,7 +1353,11 @@ export class PlanetVegetationSystem {
             'vegetationEnabled',
             'vegetationDensity',
             'vegetationQuality',
+            'vegetationVarietyLevel',
             'vegetationAlienEnabled',
+            'vegetationLowPlantsEnabled',
+            'vegetationDeadEnabled',
+            'vegetationFungiCrystalsEnabled',
             'vegetationBiomeVariety',
             'vegetationForestIntensity',
             'vegetationScenicEnabled',

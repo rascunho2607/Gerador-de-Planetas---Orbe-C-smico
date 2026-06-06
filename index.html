@@ -527,6 +527,7 @@
         import { PlanetChaosSystem } from './js/planet-chaos-system.js';
         import { PlanetVegetationSystem } from './js/planet-vegetation-system.js';
         import { createCosmicFluidEffects } from './js/cosmic-fluid-effects.js';
+        import { PlanetExplorationControls } from './js/planet-exploration-controls.js';
 
         const PLANET_RADIUS = 10;
 
@@ -758,6 +759,9 @@
         const localChaosTargets = [];
         const slowSpinners = [];
         const localBlackHoles = [];
+        let isRegeneratingPlanet = false;
+        let needsRenderListFlush = false;
+        let lastRenderRecoveryLog = 0;
         let planetChaos = null;
         const lensTempCenter = new THREE.Vector3();
         const lensTempProjected = new THREE.Vector3();
@@ -852,6 +856,7 @@
             vegetationDensity: 'medium',
             vegetationRenderDistance: 48,
             vegetationQuality: 'medium',
+            vegetationVarietyLevel: 'medium',
             vegetationBiomeVariety: 1,
             vegetationForestIntensity: 1,
             vegetationScenicEnabled: true,
@@ -862,6 +867,9 @@
             vegetationWindEnabled: true,
             vegetationWindIntensity: 0.35,
             vegetationAlienEnabled: true,
+            vegetationLowPlantsEnabled: true,
+            vegetationDeadEnabled: true,
+            vegetationFungiCrystalsEnabled: true,
             vegetationDebugBiomes: false,
             vegetationDebugClusters: false,
             vegetationRegenerateToken: 0,
@@ -890,7 +898,16 @@
             distantUpdateReduction: true,
             maxActiveObjects: 220,
             showFps: true,
-            showStats: true
+            showStats: true,
+            explorationEnabled: true,
+            explorationMouseSensitivity: 1,
+            explorationWalkSpeed: 1,
+            explorationRunSpeed: 1,
+            explorationDinoSpeed: 1,
+            explorationJumpStrength: 1,
+            explorationHeadBobEnabled: true,
+            explorationHeadBobIntensity: 1,
+            explorationCameraDistance: 'medium'
         };
         const defaultEditorState = { ...editorState };
         Object.assign(editorState, loadSettings(defaultEditorState));
@@ -982,6 +999,22 @@
             getVegetationSystem: () => vegetationSystem,
             fluidEffects: cosmicFluidEffects,
             performance: editorState
+        });
+        const surfaceExploration = new PlanetExplorationControls({
+            THREE,
+            scene,
+            camera,
+            renderer,
+            controls,
+            surfaceGroup: planetSurfaceGroup,
+            getPlanetMesh: () => currentPlanetMesh,
+            getPlanetRadius: () => PLANET_RADIUS,
+            getPlanetCenter: () => new THREE.Vector3(0, 0, 0),
+            getPlanetSurfaceHeight: (normal) => samplePlanetSurfaceHeight(normal),
+            getDinoSystem: () => dinoLife,
+            getChaosToolbar: () => chaosToolbar,
+            getSettings: () => editorState,
+            isRegenerating: () => isRegeneratingPlanet
         });
 
         const planetPresets = {
@@ -1128,24 +1161,150 @@
             });
         }
 
+        function isRenderableObject(object) {
+            return Boolean(object?.isMesh || object?.isInstancedMesh || object?.isPoints || object?.isLine);
+        }
+
+        function disposeMaterialResources(material, textures) {
+            if (!material) return;
+            Object.keys(material).forEach((key) => {
+                const value = material[key];
+                if (value?.isTexture) textures.add(value);
+            });
+        }
+
         function disposeObject(object) {
+            if (!object) return;
+            object.parent?.remove(object);
+            const geometries = new Set();
+            const materials = new Set();
+            const textures = new Set();
             object.traverse((child) => {
-                if (child.geometry) child.geometry.dispose();
-                if (child.userData?.cinematicOriginalMaterial) child.userData.cinematicOriginalMaterial.dispose();
-                if (child.material) {
-                    const materials = Array.isArray(child.material) ? child.material : [child.material];
-                    materials.forEach((mat) => {
-                        if (mat.map) mat.map.dispose();
-                        if (mat.alphaMap) mat.alphaMap.dispose();
-                        mat.dispose();
-                    });
+                if (child.geometry) geometries.add(child.geometry);
+                if (child.userData?.cinematicOriginalMaterial) materials.add(child.userData.cinematicOriginalMaterial);
+                if (!child.material) return;
+                const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+                childMaterials.forEach((material) => {
+                    if (!material) return;
+                    materials.add(material);
+                    disposeMaterialResources(material, textures);
+                });
+            });
+            geometries.forEach((geometry) => geometry.dispose?.());
+            textures.forEach((texture) => texture.dispose?.());
+            materials.forEach((material) => material.dispose?.());
+            object.traverse((child) => {
+                if (child.userData?.cinematicOriginalMaterial) child.userData.cinematicOriginalMaterial = null;
+            });
+        }
+
+        function findInvalidRenderableObjects(root = scene) {
+            const invalid = [];
+            root.traverse((object) => {
+                if (!isRenderableObject(object)) return;
+                if (!object.material || (Array.isArray(object.material) && object.material.some((material) => !material))) {
+                    invalid.push({ object, reason: 'material invalido' });
+                    return;
+                }
+                const geometry = object.geometry;
+                const position = geometry?.attributes?.position;
+                if (!geometry || !geometry.attributes || !position || !position.array) {
+                    invalid.push({ object, reason: !geometry ? 'sem geometry' : !geometry.attributes ? 'geometry sem attributes' : !position ? 'geometry sem position' : 'position sem array' });
+                    return;
+                }
+                for (const [name, attribute] of Object.entries(geometry.attributes)) {
+                    if (!attribute || !attribute.array) {
+                        invalid.push({ object, reason: `atributo ${name} invalido` });
+                        return;
+                    }
+                }
+                for (const [name, attributes] of Object.entries(geometry.morphAttributes || {})) {
+                    if (!Array.isArray(attributes)) continue;
+                    const badMorph = attributes.find((attribute) => !attribute || !attribute.array);
+                    if (badMorph) {
+                        invalid.push({ object, reason: `morph attribute ${name} invalido` });
+                        return;
+                    }
+                }
+                if (geometry.index && !geometry.index.array) {
+                    invalid.push({ object, reason: 'index buffer invalido' });
+                    return;
+                }
+                if (object.isInstancedMesh && (!object.instanceMatrix || !object.instanceMatrix.array)) {
+                    invalid.push({ object, reason: 'InstancedMesh sem instanceMatrix valido' });
                 }
             });
-            settingsPanel?.setSettings(editorState, { save: true });
+            return invalid;
+        }
+
+        function removeInvalidRenderableObjects(root = scene) {
+            const invalid = findInvalidRenderableObjects(root);
+            invalid.forEach(({ object, reason }) => {
+                console.warn('Removendo objeto renderizavel invalido antes do render:', reason, object.name || object.type, object);
+                object.parent?.remove(object);
+            });
+            if (invalid.length) needsRenderListFlush = true;
+            return invalid.length;
+        }
+
+        function renderableDebugName(object) {
+            const geometry = object?.geometry;
+            const attrs = geometry?.attributes ? Object.keys(geometry.attributes).join(',') : 'sem attrs';
+            return `${object?.name || object?.type || 'renderable'} | geom=${geometry?.type || 'null'} | attrs=${attrs}`;
+        }
+
+        function isolateRenderFailure(error) {
+            console.warn('Render falhou; isolando objeto renderizavel invalido.', error);
+            const renderables = [];
+            scene.traverse((object) => {
+                if (isRenderableObject(object)) renderables.push(object);
+            });
+            const visibility = renderables.map((object) => [object, object.visible]);
+            renderables.forEach((object) => object.visible = false);
+            const offenders = [];
+            for (const object of renderables) {
+                object.visible = true;
+                try {
+                    renderer.render(scene, camera);
+                } catch (candidateError) {
+                    offenders.push(object);
+                    console.warn('Objeto que quebra render:', renderableDebugName(object), object, candidateError);
+                }
+                object.visible = false;
+            }
+            visibility.forEach(([object, visible]) => object.visible = visible);
+            offenders.forEach((object) => object.parent?.remove(object));
+            if (offenders.length) needsRenderListFlush = true;
+            if (!offenders.length) {
+                console.warn('Render falhou, mas nenhum objeto isolado reproduziu o erro. Verifique passes/post-processing.', error);
+            }
+            return offenders.length;
+        }
+
+        function renderFrameSafely(deltaTime) {
+            removeInvalidRenderableObjects(scene);
+            if (needsRenderListFlush) {
+                renderer.renderLists?.dispose?.();
+                needsRenderListFlush = false;
+            }
+            try {
+                composer.render(deltaTime);
+            } catch (error) {
+                const removed = isolateRenderFailure(error);
+                removeInvalidRenderableObjects(scene);
+                renderer.renderLists?.dispose?.();
+                const now = performance.now();
+                if (now - lastRenderRecoveryLog > 1200) {
+                    console.warn(`Frame de render pulado apos recuperacao (${removed} objeto(s) removido(s)).`, error);
+                    lastRenderRecoveryLog = now;
+                }
+            }
         }
 
         function clearCosmicGroup() {
+            needsRenderListFlush = true;
             cosmicFluidEffects.disposeVisuals?.();
+            planetChaos?.clearSceneArtifacts?.();
             dinoLife.clearPopulation();
             vegetationSystem?.dispose?.();
             universeExpansion.dispose();
@@ -2061,6 +2220,19 @@
         }
 
         function generatePlanet(seed) {
+            if (isRegeneratingPlanet) return;
+            surfaceExploration.exitExplorationMode({ silent: true });
+            isRegeneratingPlanet = true;
+            try {
+                generatePlanetInternal(seed);
+            } finally {
+                removeInvalidRenderableObjects(scene);
+                needsRenderListFlush = true;
+                isRegeneratingPlanet = false;
+            }
+        }
+
+        function generatePlanetInternal(seed) {
             clearCosmicGroup();
             
             currentSeed = seed;
@@ -2203,13 +2375,14 @@
         const controlIds = Object.keys(editorState);
         const dinoControlKeys = ['lifeEnabled', 'lifeType', 'dinoSpecies', 'dinoCount', 'dinoScale', 'dinoMoveSpeed', 'dinoRenderDistance', 'dinoAnimateDistance', 'dinoAnimationEnabled', 'dinoPseudo3dEnabled', 'dinoBillboardFollow', 'dinoMaxSideAngle', 'dinoDistanceCulling', 'dinoMaxActive', 'dinoSpriteQuality', 'dinoDebugVisible'];
         const dinoRegenerateKeys = ['lifeEnabled', 'lifeType', 'dinoSpecies', 'dinoCount', 'dinoScale'];
-        const vegetationControlKeys = ['vegetationEnabled', 'vegetationDensity', 'vegetationRenderDistance', 'vegetationQuality', 'vegetationBiomeVariety', 'vegetationForestIntensity', 'vegetationScenicEnabled', 'vegetationScenicIntensity', 'vegetationGrowthEnabled', 'vegetationRegrowthEnabled', 'vegetationGrowthSpeed', 'vegetationWindEnabled', 'vegetationWindIntensity', 'vegetationAlienEnabled', 'vegetationDebugBiomes', 'vegetationDebugClusters', 'vegetationRegenerateToken'];
+        const vegetationControlKeys = ['vegetationEnabled', 'vegetationDensity', 'vegetationRenderDistance', 'vegetationQuality', 'vegetationVarietyLevel', 'vegetationBiomeVariety', 'vegetationForestIntensity', 'vegetationScenicEnabled', 'vegetationScenicIntensity', 'vegetationGrowthEnabled', 'vegetationRegrowthEnabled', 'vegetationGrowthSpeed', 'vegetationWindEnabled', 'vegetationWindIntensity', 'vegetationAlienEnabled', 'vegetationLowPlantsEnabled', 'vegetationDeadEnabled', 'vegetationFungiCrystalsEnabled', 'vegetationDebugBiomes', 'vegetationDebugClusters', 'vegetationRegenerateToken'];
         const cosmicControlKeys = ['cosmicBlackHolesEnabled', 'cosmicCometsEnabled', 'cosmicNebulasEnabled', 'cosmicStationsEnabled', 'cosmicPlanetsEnabled', 'cosmicOrbitLinesEnabled', 'cosmicLensDistortionEnabled', 'cosmicCometCount', 'cosmicCometTailIntensity', 'cosmicCometTailQuality', 'particleDensity', 'particleMultiplier', 'cosmicPlanetCount', 'cosmicStationCount', 'cosmicBlackHoleCount', 'blackHoleLensQuality'];
         const fluidControlKeys = ['fluidEffectsEnabled', 'fluidQuality', 'fluidNebulasEnabled', 'fluidPlasmaEnabled', 'fluidExplosionsEnabled', 'fluidBlackHolesEnabled', 'fluidTrailsEnabled', 'fluidIntensity', 'fluidInternalResolution', 'fluidUpdateRate', 'fluidMaxSimultaneous'];
+        const explorationControlKeys = ['explorationEnabled', 'explorationMouseSensitivity', 'explorationWalkSpeed', 'explorationRunSpeed', 'explorationDinoSpeed', 'explorationJumpStrength', 'explorationHeadBobEnabled', 'explorationHeadBobIntensity', 'explorationCameraDistance'];
         const graphicsLiveKeys = ['graphicsPreset', 'internalResolution', 'pixelRatioMode', 'targetFps', 'autoPerformanceOptimization', 'powerSaveMode', 'pauseWhenHidden', 'chaosQuality', 'chaosMaxEffects', 'chaosMaxFragments', 'decorativeRenderDistance', 'distantUpdateReduction', 'maxActiveObjects', 'showFps', 'showStats', ...fluidControlKeys, ...vegetationControlKeys];
         const lightingLiveKeys = ['starDensity', 'starBrightness', 'starSize', 'backgroundColor', 'ambientIntensity', 'lightIntensity', 'exposure', 'cinematicLightingEnabled', 'cinematicExposure', 'cinematicContrast', 'cinematicIntensity', 'cinematicBloom', 'cinematicBloomStrength', 'cinematicAtmosphereFresnel', 'cinematicFakeReflections', 'cinematicShadowQuality', 'cinematicAmbientOcclusion'];
         const regenerateSettingKeys = ['cloudsEnabled', 'cloudOpacity', 'atmosphereIntensity', 'atmosphereColor', 'ringsEnabled', 'ringWidth', 'ringOpacity', 'ringColor', 'ringDebrisEnabled', 'ringDebrisDensity', 'ringDebrisQuality', 'ringAnimationEnabled', 'nebulaEnabled', 'nebulaIntensity', 'galaxyEnabled', 'distantPlanets', 'asteroidCount', 'comets', 'blackHoles', ...cosmicControlKeys];
-        const persistentSettingKeys = [...new Set([...graphicsLiveKeys, ...lightingLiveKeys, ...dinoControlKeys, ...regenerateSettingKeys])];
+        const persistentSettingKeys = [...new Set([...graphicsLiveKeys, ...lightingLiveKeys, ...dinoControlKeys, ...explorationControlKeys, ...regenerateSettingKeys])];
         let regenerateTimer = null;
         let settingsPanel = null;
 
@@ -2335,6 +2508,9 @@
             universeExpansion.updateSettings?.(editorState);
             syncControlsFromState();
             saveSettings(editorState);
+            if (explorationControlKeys.includes(meta.key) && editorState.explorationEnabled === false) {
+                surfaceExploration.exitExplorationMode();
+            }
 
             if (dinoRegenerateKeys.includes(meta.key)) {
                 dinoLife.regeneratePopulation();
@@ -2483,10 +2659,15 @@
                 });
             });
 
-            document.getElementById('toggleUiBtn').addEventListener('click', () => {
-                document.body.classList.toggle('wallpaper-mode');
-                const hidden = document.body.classList.contains('wallpaper-mode');
+            const setUiHidden = (hidden) => {
+                document.body.classList.toggle('wallpaper-mode', hidden);
+                document.body.classList.toggle('ui-hidden', hidden);
+                chaosToolbar.setGlobalUiHidden(hidden);
                 document.getElementById('toggleUiBtn').innerHTML = hidden ? '<i class="fas fa-eye-slash"></i>' : '<i class="fas fa-eye"></i>';
+            };
+
+            document.getElementById('toggleUiBtn').addEventListener('click', () => {
+                setUiHidden(!document.body.classList.contains('ui-hidden'));
             });
 
             const settingsButton = document.getElementById('toggleSettingsBtn');
@@ -2578,6 +2759,7 @@
             requestAnimationFrame(animate);
             const now = performance.now();
             if (editorState.pauseWhenHidden && document.hidden) return;
+            if (isRegeneratingPlanet) return;
             const targetFps = editorState.powerSaveMode ? 30 : editorState.targetFps;
             if (targetFps !== 'unlimited') {
                 const frameInterval = 1000 / Number(targetFps || 60);
@@ -2657,6 +2839,7 @@
                 }
             }
             orbitingObjects.forEach(({ object, speed }) => {
+                if (!object?.parent) return;
                 object.rotation.y += speed;
                 if (object.userData?.debris) {
                     object.children.forEach((debris) => {
@@ -2673,6 +2856,7 @@
             });
             const reduceDistantUpdates = editorState.distantUpdateReduction && camera.position.length() > PLANET_RADIUS * 7;
             slowSpinners.forEach((object, index) => {
+                if (!object?.parent) return;
                 if (reduceDistantUpdates && index % 2 === Math.floor(time * 10) % 2) return;
                 if (object.userData?.cloudLayer) {
                     object.rotation.y += object.userData.cloudSpeed;
@@ -2700,12 +2884,15 @@
             nebulaRing.rotation.z += 0.0004;
             nebulaRing.rotation.x += 0.0002;
             dinoLife.update(deltaTime);
-            vegetationSystem.update(deltaTime, camera);
             universeExpansion.update(deltaTime, time);
             planetChaos?.update(deltaTime);
+            surfaceExploration.updateExplorationControls(deltaTime);
+            vegetationSystem.update(deltaTime, camera);
             cosmicFluidEffects.update(deltaTime, time);
             
-            controls.update(); // atualiza se houver interação
+            if (!surfaceExploration.isExplorationModeActive()) {
+                controls.update(); // atualiza se houver interação
+            }
             updateCinematicLighting(deltaTime, cinematicLighting, {
                 sunPosition: mainLight.position,
                 planetMesh: currentPlanetMesh?.isMesh ? currentPlanetMesh : null,
@@ -2726,7 +2913,7 @@
             blackHoleLensPass.uniforms.lensD.value.set(lensData[3]?.x || 0, lensData[3]?.y || 0, lensData[3]?.radius || 0, lensData[3]?.strength || 0);
             blackHoleLensPass.uniforms.lensE.value.set(lensData[4]?.x || 0, lensData[4]?.y || 0, lensData[4]?.radius || 0, lensData[4]?.strength || 0);
             blackHoleLensPass.uniforms.time.value = time;
-            composer.render(deltaTime);
+            renderFrameSafely(deltaTime);
         }
         
         animate();

@@ -150,6 +150,8 @@ export class DinoLifeSystem {
         this.surfaceUp = new this.THREE.Vector3(0, 1, 0);
         this.maxActive = 80;
         this.activeCount = 0;
+        this.interactiveDinoObjects = [];
+        this.dinoObjectMap = new Map();
     }
 
     setPlanetInfo(info) {
@@ -163,6 +165,8 @@ export class DinoLifeSystem {
 
     clearPopulation() {
         this.population.length = 0;
+        this.interactiveDinoObjects.length = 0;
+        this.dinoObjectMap.clear();
         while (this.group.children.length) {
             const child = this.group.children[0];
             const geometries = new Set();
@@ -221,9 +225,22 @@ export class DinoLifeSystem {
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(scale * 0.8, scale), material);
         mesh.frustumCulled = false;
         mesh.renderOrder = 2;
+        const hitArea = new THREE.Mesh(
+            new THREE.SphereGeometry(scale * 0.64, 10, 8),
+            new THREE.MeshBasicMaterial({
+                transparent: true,
+                opacity: 0,
+                colorWrite: false,
+                depthWrite: false
+            })
+        );
+        hitArea.name = 'DinoInteractionHitArea';
+        hitArea.frustumCulled = false;
+        hitArea.renderOrder = -1;
         const group = new THREE.Group();
         group.frustumCulled = false;
         group.add(mesh);
+        group.add(hitArea);
         group.visible = false;
         this.group.add(group);
 
@@ -235,6 +252,7 @@ export class DinoLifeSystem {
             normal,
             tangent,
             mesh,
+            hitArea,
             group,
             material,
             animation: new SpriteAnimationController(this, species, material),
@@ -246,6 +264,12 @@ export class DinoLifeSystem {
             speed: randomRange(random, 0.006, 0.018) * speedScale * (this.settings.dinoMoveSpeed || 1) * (DINO_MANIFEST[species].kind === 'predator' ? 1.25 : 0.82),
             random
         };
+        mesh.userData.dinoLifeDino = dino;
+        hitArea.userData.dinoLifeDino = dino;
+        group.userData.dinoLifeDino = dino;
+        this.dinoObjectMap.set(mesh.uuid, dino);
+        this.dinoObjectMap.set(hitArea.uuid, dino);
+        this.dinoObjectMap.set(group.uuid, dino);
         this.placeDino(dino);
         return dino;
     }
@@ -271,6 +295,10 @@ export class DinoLifeSystem {
         dino.group.quaternion.setFromUnitVectors(this.surfaceUp, up);
 
         dino.mesh.position.set(0, scale * 0.5, 0);
+        if (dino.hitArea) {
+            dino.hitArea.position.set(0, scale * 0.5, 0);
+            dino.hitArea.scale.setScalar(1 + Math.max(0, Number(this.settings.dinoScale || 1) - 1) * 0.12);
+        }
         this.updateDinoBillboard(dino);
     }
 
@@ -343,6 +371,14 @@ export class DinoLifeSystem {
             cameraYaw = Number.isFinite(dino.lastValidCameraYaw) ? dino.lastValidCameraYaw : baseYaw;
         }
 
+        if (dino.controlled) {
+            dino.mesh.rotation.set(0, baseYaw, 0);
+            dino.mesh.scale.set(1, 1, 1);
+            dino.lastValidBillboardYaw = baseYaw;
+            dino.lastValidCameraYaw = cameraYaw;
+            return;
+        }
+
         const pseudo3d = this.settings.dinoPseudo3dEnabled !== false;
         const followFactor = pseudo3d ? clampValue(Number(this.settings.dinoBillboardFollow ?? DINO_BILLBOARD_FOLLOW_FACTOR), 0, 1) : 1;
         const maxSideAngle = pseudo3d
@@ -386,10 +422,15 @@ export class DinoLifeSystem {
         for (const dino of this.population) {
             dino.group.getWorldPosition(this.tmpWorldPosition);
             const distance = this.tmpWorldPosition.distanceTo(this.camera.position);
-            const visible = distance < renderDistance && active < this.maxActive;
+            const controlled = Boolean(dino.controlled);
+            const visible = controlled || (distance < renderDistance && active < this.maxActive);
             dino.group.visible = visible;
             if (!visible) continue;
             active++;
+            if (controlled) {
+                this.placeDino(dino);
+                continue;
+            }
 
             const animate = distance < animateDistance;
             this.updateBehavior(dino, deltaTime, animate);
@@ -400,6 +441,62 @@ export class DinoLifeSystem {
             }
         }
         this.activeCount = active;
+    }
+
+    getInteractiveDinoObjects() {
+        this.interactiveDinoObjects.length = 0;
+        if (!this.shouldRunForPlanet() || !this.population.length) return this.interactiveDinoObjects;
+        for (const dino of this.population) {
+            if (!this.isDinoInteractive(dino)) continue;
+            if (dino.hitArea) this.interactiveDinoObjects.push(dino.hitArea);
+            this.interactiveDinoObjects.push(dino.mesh);
+        }
+        return this.interactiveDinoObjects;
+    }
+
+    isDinoInteractive(dino) {
+        return Boolean(
+            dino &&
+            dino.group?.parent &&
+            dino.mesh &&
+            dino.group.visible &&
+            dino.mesh.visible !== false
+        );
+    }
+
+    getDinoFromObject(object) {
+        let current = object;
+        while (current) {
+            const dino = this.dinoObjectMap.get(current.uuid) || current.userData?.dinoLifeDino;
+            if (dino && this.population.includes(dino) && dino.group?.parent) return dino;
+            current = current.parent;
+        }
+        return null;
+    }
+
+    setDinoControlled(dino, controlled) {
+        if (!dino || !this.population.includes(dino) || !dino.group?.parent) return false;
+        dino.controlled = Boolean(controlled);
+        if (dino.controlled) {
+            dino.controlRestoreState = {
+                state: dino.state,
+                stateTimer: dino.stateTimer,
+                turnTimer: dino.turnTimer
+            };
+            dino.group.visible = true;
+            dino.state = 'idle';
+            dino.stateTimer = Number.POSITIVE_INFINITY;
+            dino.turnTimer = Number.POSITIVE_INFINITY;
+            dino.animation?.setAnimation?.('idle', this.getSpriteDirection(dino));
+        } else {
+            const restore = dino.controlRestoreState || {};
+            dino.state = restore.state || dino.state || 'walk';
+            dino.stateTimer = Number.isFinite(restore.stateTimer) ? Math.max(0.4, restore.stateTimer) : randomRange(dino.random || Math.random, 0.8, 2.2);
+            dino.turnTimer = Number.isFinite(restore.turnTimer) ? Math.max(0.3, restore.turnTimer) : randomRange(dino.random || Math.random, 0.5, 1.8);
+            dino.controlRestoreState = null;
+            dino.animation?.setAnimation?.(dino.state === 'run' ? 'run' : dino.state === 'walk' ? 'walk' : 'idle', this.getSpriteDirection(dino));
+        }
+        return true;
     }
 
     updateBehavior(dino, deltaTime, animate) {
@@ -445,7 +542,8 @@ export class DinoLifeSystem {
         const x = tangent.dot(right);
         const y = tangent.dot(forward);
         const angle = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
-        const index = Math.round(angle / 45) % 8;
+        let index = Math.round(angle / 45) % 8;
+        if (dino.controlled) index = (index + 4) % 8;
         return DIRECTIONS[index];
     }
 

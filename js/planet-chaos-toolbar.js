@@ -7,6 +7,9 @@ const TOOL_CONFIGS = [
 
 const DEFAULT_STATE = {
     tool: 'meteor',
+    collapsed: false,
+    visible: true,
+    toolsEnabled: true,
     power: 0.72,
     radius: 0.38,
     intensity: 0.62,
@@ -44,10 +47,63 @@ function injectStyles() {
             box-shadow: 0 14px 50px rgba(0, 0, 0, 0.48);
             backdrop-filter: blur(16px);
             pointer-events: auto;
+            transition: transform 0.28s ease, opacity 0.22s ease;
         }
 
-        .planet-chaos-shell.is-hidden {
-            transform: translateX(-50%) translateY(calc(100% - 34px));
+        .planet-chaos-shell.is-collapsed {
+            transform: translateX(-50%) translateY(calc(100% + 26px));
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .planet-chaos-shell.is-global-hidden,
+        .planet-chaos-handle.is-global-hidden {
+            display: none;
+        }
+
+        body.wallpaper-mode .planet-chaos-shell,
+        body.wallpaper-mode .planet-chaos-handle,
+        body.ui-hidden .planet-chaos-shell,
+        body.ui-hidden .planet-chaos-handle {
+            display: none;
+        }
+
+        .planet-chaos-handle {
+            position: fixed;
+            left: 50%;
+            bottom: 10px;
+            z-index: 24;
+            transform: translateX(-50%) translateY(130%);
+            width: 54px;
+            min-height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            border-radius: 8px 8px 0 0;
+            border: 1px solid rgba(124, 175, 255, 0.28);
+            border-bottom: 0;
+            color: #f7fbff;
+            background: rgba(4, 8, 20, 0.82);
+            box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(14px);
+            opacity: 0;
+            pointer-events: none;
+            transition: transform 0.28s ease, opacity 0.22s ease, border-color 0.2s ease;
+            font: inherit;
+            font-size: 0.78rem;
+            letter-spacing: 0;
+        }
+
+        .planet-chaos-handle.is-visible {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .planet-chaos-handle:hover {
+            border-color: rgba(166, 204, 255, 0.68);
+            background: rgba(32, 52, 92, 0.94);
         }
 
         .planet-chaos-tools,
@@ -180,6 +236,7 @@ function injectStyles() {
                 height: 40px;
                 flex: 0 0 auto;
             }
+
         }
     `;
     document.head.appendChild(style);
@@ -192,7 +249,9 @@ export class PlanetChaosToolbar extends EventTarget {
         this.state = { ...DEFAULT_STATE, ...(options.initialState || {}) };
         this.tools = TOOL_CONFIGS;
         this.element = this.createElement();
+        this.handleElement = this.createHandleElement();
         document.body.appendChild(this.element);
+        document.body.appendChild(this.handleElement);
         this.sync();
     }
 
@@ -255,12 +314,13 @@ export class PlanetChaosToolbar extends EventTarget {
                 <button class="planet-chaos-action" type="button" data-action="fragmentsVisible" title="Mostrar/ocultar detritos"><i class="fas fa-cubes"></i></button>
                 <button class="planet-chaos-action" type="button" data-action="slowMotion" title="Slow motion"><i class="fas fa-hourglass-half"></i></button>
                 <button class="planet-chaos-action" type="button" data-action="paused" title="Pausar caos"><i class="fas fa-pause"></i></button>
-                <button class="planet-chaos-hide" type="button" data-action="hide" title="Esconder toolbar"><i class="fas fa-chevron-down"></i></button>
+                <button class="planet-chaos-hide" type="button" data-action="collapse" title="Recolher ferramentas"><i class="fas fa-chevron-down"></i></button>
             </div>
         `;
 
         root.querySelectorAll('[data-tool]').forEach((button) => {
             button.addEventListener('click', () => {
+                if (!this.isToolsEnabled()) return;
                 this.state.tool = button.dataset.tool;
                 this.sync();
                 this.emit('tool-change');
@@ -270,6 +330,10 @@ export class PlanetChaosToolbar extends EventTarget {
         root.querySelectorAll('[data-setting]').forEach((input) => {
             const eventName = input.type === 'range' ? 'input' : 'change';
             input.addEventListener(eventName, () => {
+                if (!this.isToolsEnabled()) {
+                    this.sync();
+                    return;
+                }
                 this.state[input.dataset.setting] = input.type === 'checkbox' ? input.checked : input.type === 'range' ? Number(input.value) : input.value;
                 this.sync();
                 this.emit('settings-change');
@@ -279,9 +343,8 @@ export class PlanetChaosToolbar extends EventTarget {
         root.querySelectorAll('[data-action]').forEach((button) => {
             button.addEventListener('click', () => {
                 const action = button.dataset.action;
-                if (action === 'hide') {
-                    root.classList.toggle('is-hidden');
-                    button.innerHTML = root.classList.contains('is-hidden') ? '<i class="fas fa-chevron-up"></i>' : '<i class="fas fa-chevron-down"></i>';
+                if (action === 'collapse') {
+                    this.setCollapsed(true);
                     return;
                 }
                 if (action === 'paused' || action === 'slowMotion' || action === 'fragmentsVisible') {
@@ -295,6 +358,17 @@ export class PlanetChaosToolbar extends EventTarget {
         return root;
     }
 
+    createHandleElement() {
+        const handle = document.createElement('button');
+        handle.className = 'planet-chaos-handle';
+        handle.type = 'button';
+        handle.title = 'Mostrar barra';
+        handle.setAttribute('aria-label', 'Mostrar barra de ferramentas');
+        handle.innerHTML = '<i class="fas fa-chevron-up"></i>';
+        handle.addEventListener('click', () => this.setCollapsed(false));
+        return handle;
+    }
+
     emit(type) {
         this.dispatchEvent(new CustomEvent(type, { detail: this.getState() }));
     }
@@ -303,7 +377,44 @@ export class PlanetChaosToolbar extends EventTarget {
         return { ...this.state };
     }
 
+    setVisible(visible) {
+        const wasEnabled = this.isToolsEnabled();
+        this.state.visible = Boolean(visible);
+        this.sync();
+        if (wasEnabled !== this.isToolsEnabled()) this.emit('tools-enabled-change');
+    }
+
+    setGlobalUiHidden(hidden) {
+        this.setVisible(!hidden);
+    }
+
+    setCollapsed(collapsed) {
+        const wasEnabled = this.isToolsEnabled();
+        this.state.collapsed = Boolean(collapsed);
+        this.sync();
+        this.emit('collapse-change');
+        if (wasEnabled !== this.isToolsEnabled()) this.emit('tools-enabled-change');
+    }
+
+    isCollapsed() {
+        return Boolean(this.state.collapsed);
+    }
+
+    setToolsEnabled(enabled) {
+        this.state.toolsEnabled = Boolean(enabled);
+        this.sync();
+        this.emit('tools-enabled-change');
+    }
+
+    isToolsEnabled() {
+        return Boolean(this.state.toolsEnabled && this.state.visible && !this.state.collapsed);
+    }
+
     sync() {
+        this.element.classList.toggle('is-collapsed', this.state.collapsed);
+        this.element.classList.toggle('is-global-hidden', !this.state.visible);
+        this.handleElement?.classList.toggle('is-visible', this.state.visible && this.state.collapsed);
+        this.handleElement?.classList.toggle('is-global-hidden', !this.state.visible);
         this.element.querySelectorAll('[data-tool]').forEach((button) => {
             button.classList.toggle('is-active', button.dataset.tool === this.state.tool);
         });
@@ -326,5 +437,6 @@ export class PlanetChaosToolbar extends EventTarget {
 
     dispose() {
         this.element.remove();
+        this.handleElement?.remove();
     }
 }

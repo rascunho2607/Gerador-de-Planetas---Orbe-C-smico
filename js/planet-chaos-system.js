@@ -122,6 +122,10 @@ export class PlanetChaosSystem {
         this.toolbar?.addEventListener('tool-change', (event) => {
             this.activeTool = event.detail.tool;
         });
+        this.toolbar?.addEventListener('tools-enabled-change', () => this.disableToolInteraction());
+        this.toolbar?.addEventListener('collapse-change', () => {
+            if (!this.areToolsEnabled()) this.disableToolInteraction();
+        });
         this.toolbar?.addEventListener('reset', () => {
             this.damage.reset();
             this.fracture.clear();
@@ -152,6 +156,14 @@ export class PlanetChaosSystem {
 
     setPlanet(mesh, surfaceGroup) {
         this.damage.setPlanet(mesh, surfaceGroup);
+        this.lastHit = null;
+        this.reticle.visible = false;
+    }
+
+    clearSceneArtifacts() {
+        this.damage.setPlanet(null, null);
+        this.fracture.clear();
+        this.effects.dispose();
         this.lastHit = null;
         this.reticle.visible = false;
     }
@@ -194,6 +206,18 @@ export class PlanetChaosSystem {
 
     isPaused() {
         return Boolean(this.getState().paused);
+    }
+
+    disableToolInteraction() {
+        this.reticle.visible = false;
+        this.lastHit = null;
+        this.dragging = false;
+        this.laserUndoOpen = false;
+        this.controls.enabled = true;
+    }
+
+    areToolsEnabled() {
+        return this.toolbar?.isToolsEnabled?.() ?? Boolean(this.getState().toolsEnabled ?? true);
     }
 
     pointerToNdc(event) {
@@ -239,8 +263,8 @@ export class PlanetChaosSystem {
     }
 
     handlePointerMove(event) {
-        if (this.isPaused()) {
-            this.reticle.visible = false;
+        if (this.isPaused() || !this.areToolsEnabled()) {
+            this.disableToolInteraction();
             return;
         }
         const hit = this.raycast(event);
@@ -249,7 +273,7 @@ export class PlanetChaosSystem {
     }
 
     handlePointerDown(event) {
-        if (event.button !== 0 || this.isPaused()) return;
+        if (event.button !== 0 || this.isPaused() || !this.areToolsEnabled()) return;
         const hit = this.raycast(event);
         if (!hit) return;
         event.preventDefault();
@@ -278,7 +302,7 @@ export class PlanetChaosSystem {
     }
 
     handleDoubleClick(event) {
-        if (this.isPaused()) return;
+        if (this.isPaused() || !this.areToolsEnabled()) return;
         const hit = this.raycast(event);
         if (!hit?.isPlanet) return;
         const state = this.getState();
@@ -310,6 +334,10 @@ export class PlanetChaosSystem {
         this.effects.update(deltaTime, timeScale);
         this.fracture.update(deltaTime, timeScale);
         if (this.isPaused()) return;
+        if (!this.areToolsEnabled()) {
+            this.disableToolInteraction();
+            return;
+        }
         this.actionCooldown -= deltaTime || 0.016;
         this.laserCooldown -= deltaTime || 0.016;
         if (!this.dragging || !this.lastHit?.isPlanet) return;
@@ -323,6 +351,7 @@ export class PlanetChaosSystem {
     }
 
     useCurrentTool(hit, continuous = false) {
+        if (!this.areToolsEnabled()) return;
         const state = this.getState();
         if (state.tool === 'meteor') {
             if (state.meteorShower) this.launchMeteorShower(hit, 5);
@@ -344,6 +373,7 @@ export class PlanetChaosSystem {
     }
 
     launchMeteor(hit, offsetScale = 1) {
+        if (!this.areToolsEnabled()) return;
         const state = this.getState();
         const radius = this.toolRadius(state);
         const strength = this.toolStrength(state);
@@ -384,11 +414,15 @@ export class PlanetChaosSystem {
     launchMeteorShower(hit, count = 5) {
         const cappedCount = Math.min(count, this.performance.maxMeteorShower || 4);
         for (let i = 0; i < cappedCount; i++) {
-            setTimeout(() => this.launchMeteor(hit, 1.4 + i * 0.08), i * 130);
+            setTimeout(() => {
+                if (!this.areToolsEnabled()) return;
+                this.launchMeteor(hit, 1.4 + i * 0.08);
+            }, i * 130);
         }
     }
 
     useLaser(hit) {
+        if (!this.areToolsEnabled()) return;
         const state = this.getState();
         const radius = this.toolRadius(state) * 0.48;
         const strength = this.toolStrength(state) * 0.36;
@@ -427,6 +461,7 @@ export class PlanetChaosSystem {
     }
 
     useFreeze(hit) {
+        if (!this.areToolsEnabled()) return;
         const state = this.getState();
         const radius = this.toolRadius(state);
         const strength = this.toolStrength(state);
@@ -435,6 +470,7 @@ export class PlanetChaosSystem {
     }
 
     hitLocalObject(hit) {
+        if (!this.areToolsEnabled()) return;
         const state = this.getState();
         const color = state.tool === 'freeze' ? 0xc8f4ff : state.tool === 'laser' ? 0xff4058 : 0xff8138;
         this.effects.damageObject(hit.object, hit.point, { radius: this.toolRadius(state) * 0.35, color });

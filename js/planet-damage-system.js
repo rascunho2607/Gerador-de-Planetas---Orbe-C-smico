@@ -8,12 +8,20 @@ function smoothFalloff(value) {
 }
 
 function disposeNode(node) {
+    if (!node) return;
+    node.parent?.remove(node);
+    const geometries = new Set();
+    const materials = new Set();
     node.traverse((child) => {
-        if (child.geometry) child.geometry.dispose();
+        if (child.geometry) geometries.add(child.geometry);
         if (!child.material) return;
-        const materials = Array.isArray(child.material) ? child.material : [child.material];
-        materials.forEach((material) => material.dispose());
+        const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+        childMaterials.forEach((material) => {
+            if (material) materials.add(material);
+        });
     });
+    geometries.forEach((geometry) => geometry.dispose?.());
+    materials.forEach((material) => material.dispose?.());
 }
 
 export class PlanetDamageSystem {
