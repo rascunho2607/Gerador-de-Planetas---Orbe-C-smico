@@ -42,7 +42,7 @@
         /* Interface principal */
         .ui {
             position: absolute;
-            bottom: 30px;
+            bottom: 104px;
             left: 0;
             right: 0;
             display: flex;
@@ -138,7 +138,7 @@
             position: absolute;
             top: 96px;
             width: min(330px, calc(100vw - 28px));
-            max-height: calc(100vh - 190px);
+            max-height: calc(100vh - 250px);
             overflow: auto;
             z-index: 12;
             pointer-events: auto;
@@ -267,6 +267,12 @@
             font-size: 0.95rem;
         }
 
+        .top-actions button.active {
+            background: rgba(35, 74, 145, 0.92);
+            border-color: rgba(150, 190, 255, 0.8);
+            box-shadow: 0 0 24px rgba(90, 145, 255, 0.38);
+        }
+
         body.wallpaper-mode .editor-panel,
         body.wallpaper-mode .ui,
         body.wallpaper-mode .info-panel,
@@ -282,6 +288,11 @@
 
         body.wallpaper-mode .top-actions:hover { opacity: 1; }
 
+        body.settings-open .planet-panel,
+        body.settings-open .universe-panel {
+            display: none;
+        }
+
         @media (max-width: 600px) {
             button { padding: 8px 18px; font-size: 0.9rem; }
             .info-panel { top: 12px; left: 12px; padding: 8px 14px; }
@@ -293,8 +304,8 @@
             }
             .planet-panel { left: 14px; }
             .universe-panel { right: 14px; display: none; }
-            .ui { bottom: 8px; gap: 10px; }
-            .seed-value { right: 12px; bottom: 82px; }
+            .ui { bottom: 148px; gap: 10px; }
+            .seed-value { right: 12px; bottom: 96px; }
         }
     </style>
 </head>
@@ -304,6 +315,7 @@
         <p>Terreno dinâmico | Cores orgânicas | Rotação suave</p>
     </div>
     <div class="top-actions">
+        <button id="toggleSettingsBtn" title="Configurações"><i class="fas fa-sliders-h"></i></button>
         <button id="toggleUiBtn" title="Ocultar interface"><i class="fas fa-eye"></i></button>
     </div>
     <details class="editor-panel planet-panel" open>
@@ -453,11 +465,34 @@
             </div>
             <div class="control-group">
                 <div class="control-title">Luz e cinema</div>
+                <label class="toggle-row">Iluminacao Cinematografica <input id="cinematicLightingEnabled" type="checkbox"></label>
+                <label class="control-row">Preset de luz
+                    <select id="cinematicLightingPreset">
+                        <option value="low">Baixo</option>
+                        <option value="medium">Medio</option>
+                        <option value="high">Alto</option>
+                        <option value="cinematic">Cinematografico</option>
+                    </select>
+                </label>
                 <label class="control-row">Sol X <span data-value-for="sunX"></span><input id="sunX" type="range" min="-10" max="10" step="0.1"></label>
                 <label class="control-row">Sol Y <span data-value-for="sunY"></span><input id="sunY" type="range" min="-4" max="6" step="0.1"></label>
                 <label class="control-row">Luz principal <span data-value-for="lightIntensity"></span><input id="lightIntensity" type="range" min="0" max="3" step="0.05"></label>
                 <label class="control-row">Luz ambiente <span data-value-for="ambientIntensity"></span><input id="ambientIntensity" type="range" min="0" max="1.2" step="0.02"></label>
                 <label class="control-row">Exposicao <span data-value-for="exposure"></span><input id="exposure" type="range" min="0.5" max="1.8" step="0.01"></label>
+                <label class="control-row">Exposicao cinema <span data-value-for="cinematicExposure"></span><input id="cinematicExposure" type="range" min="0.6" max="1.8" step="0.01"></label>
+                <label class="control-row">Contraste cinema <span data-value-for="cinematicContrast"></span><input id="cinematicContrast" type="range" min="0.85" max="1.45" step="0.01"></label>
+                <label class="control-row">Intensidade cinema <span data-value-for="cinematicIntensity"></span><input id="cinematicIntensity" type="range" min="0.45" max="1.8" step="0.01"></label>
+                <label class="toggle-row">Bloom emissivo <input id="cinematicBloom" type="checkbox"></label>
+                <label class="control-row">Forca do bloom <span data-value-for="cinematicBloomStrength"></span><input id="cinematicBloomStrength" type="range" min="0" max="1.4" step="0.01"></label>
+                <label class="control-row">Sombras
+                    <select id="cinematicShadowQuality">
+                        <option value="off">Desligadas</option>
+                        <option value="low">Baixa</option>
+                        <option value="medium">Media</option>
+                        <option value="high">Alta</option>
+                    </select>
+                </label>
+                <label class="toggle-row">Oclusao fake <input id="cinematicAmbientOcclusion" type="checkbox"></label>
             </div>
         </div>
     </details>
@@ -476,6 +511,22 @@
         import SimplexNoise from 'simplex-noise';
         import { DinoLifeSystem } from './js/dino-life.js';
         import { UniverseExpansion } from './js/universe-expansion.js';
+        import {
+            createCinematicLighting,
+            updateCinematicLighting,
+            applyLightingPreset,
+            updateLightingSettings
+        } from './js/cinematic-lighting.js';
+        import {
+            createSettingsPanel,
+            loadSettings,
+            saveSettings,
+            resetSettings
+        } from './js/settings-panel.js';
+        import { PlanetChaosToolbar } from './js/planet-chaos-toolbar.js';
+        import { PlanetChaosSystem } from './js/planet-chaos-system.js';
+        import { PlanetVegetationSystem } from './js/planet-vegetation-system.js';
+        import { createCosmicFluidEffects } from './js/cosmic-fluid-effects.js';
 
         const PLANET_RADIUS = 10;
 
@@ -492,7 +543,11 @@
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        renderer.outputEncoding = THREE.sRGBEncoding;
+        if ('outputColorSpace' in renderer && THREE.SRGBColorSpace) {
+            renderer.outputColorSpace = THREE.SRGBColorSpace;
+        } else {
+            renderer.outputEncoding = THREE.sRGBEncoding;
+        }
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
         renderer.toneMappingExposure = 1.1;
         renderer.shadowMap.enabled = true; // sombras para estrelas? não essencial mas elegante
@@ -504,6 +559,9 @@
                 lensCount: { value: 0 },
                 lensA: { value: new THREE.Vector4(0, 0, 0, 0) },
                 lensB: { value: new THREE.Vector4(0, 0, 0, 0) },
+                lensC: { value: new THREE.Vector4(0, 0, 0, 0) },
+                lensD: { value: new THREE.Vector4(0, 0, 0, 0) },
+                lensE: { value: new THREE.Vector4(0, 0, 0, 0) },
                 resolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) },
                 time: { value: 0 }
             },
@@ -519,6 +577,9 @@
                 uniform int lensCount;
                 uniform vec4 lensA;
                 uniform vec4 lensB;
+                uniform vec4 lensC;
+                uniform vec4 lensD;
+                uniform vec4 lensE;
                 uniform vec2 resolution;
                 uniform float time;
                 varying vec2 vUv;
@@ -562,10 +623,16 @@
                     vec2 warpedUv = vUv;
                     if (lensCount > 0) warpedUv = lensWarp(warpedUv, lensA);
                     if (lensCount > 1) warpedUv = lensWarp(warpedUv, lensB);
+                    if (lensCount > 2) warpedUv = lensWarp(warpedUv, lensC);
+                    if (lensCount > 3) warpedUv = lensWarp(warpedUv, lensD);
+                    if (lensCount > 4) warpedUv = lensWarp(warpedUv, lensE);
                     warpedUv = clamp(warpedUv, vec2(0.001), vec2(0.999));
                     vec3 color = texture2D(tDiffuse, warpedUv).rgb;
                     if (lensCount > 0) color = lensGrade(vUv, color, lensA);
                     if (lensCount > 1) color = lensGrade(vUv, color, lensB);
+                    if (lensCount > 2) color = lensGrade(vUv, color, lensC);
+                    if (lensCount > 3) color = lensGrade(vUv, color, lensD);
+                    if (lensCount > 4) color = lensGrade(vUv, color, lensE);
                     gl_FragColor = vec4(color, 1.0);
                 }
             `
@@ -688,11 +755,24 @@
         const planetSurfaceGroup = new THREE.Group();
         cosmicGroup.add(planetSurfaceGroup);
         const orbitingObjects = [];
+        const localChaosTargets = [];
         const slowSpinners = [];
+        const localBlackHoles = [];
+        let planetChaos = null;
+        const lensTempCenter = new THREE.Vector3();
+        const lensTempProjected = new THREE.Vector3();
+        const lensTempEdge = new THREE.Vector3();
+        const lensCameraRight = new THREE.Vector3();
         scene.add(cosmicGroup);
         let surfaceSampler = null;
 
         const editorState = {
+            graphicsPreset: 'medium',
+            internalResolution: 1,
+            pixelRatioMode: 'auto',
+            antialiasEnabled: true,
+            targetFps: 'unlimited',
+            autoPerformanceOptimization: false,
             objectType: 'terrestrial',
             planetPreset: 'earth',
             waterLevel: 0.34,
@@ -741,6 +821,17 @@
             lightIntensity: 1.45,
             ambientIntensity: 0.24,
             exposure: 1.1,
+            cinematicLightingEnabled: true,
+            cinematicLightingPreset: 'medium',
+            cinematicExposure: 1.08,
+            cinematicContrast: 1.1,
+            cinematicIntensity: 1,
+            cinematicBloom: true,
+            cinematicBloomStrength: 0.42,
+            cinematicAtmosphereFresnel: true,
+            cinematicFakeReflections: true,
+            cinematicShadowQuality: 'off',
+            cinematicAmbientOcclusion: false,
             lifeEnabled: false,
             lifeType: 'dinosaurs',
             dinoSpecies: ['Blue Raptor', 'T-Rex', 'Triceratops'],
@@ -748,9 +839,95 @@
             dinoScale: 1,
             dinoMoveSpeed: 1,
             dinoRenderDistance: 55,
-            dinoAnimateDistance: 35
+            dinoAnimateDistance: 35,
+            dinoAnimationEnabled: true,
+            dinoPseudo3dEnabled: true,
+            dinoBillboardFollow: 0.7,
+            dinoMaxSideAngle: 65,
+            dinoDistanceCulling: true,
+            dinoMaxActive: 80,
+            dinoSpriteQuality: 'medium',
+            dinoDebugVisible: false,
+            vegetationEnabled: true,
+            vegetationDensity: 'medium',
+            vegetationRenderDistance: 48,
+            vegetationQuality: 'medium',
+            vegetationBiomeVariety: 1,
+            vegetationForestIntensity: 1,
+            vegetationScenicEnabled: true,
+            vegetationScenicIntensity: 0.75,
+            vegetationGrowthEnabled: true,
+            vegetationRegrowthEnabled: true,
+            vegetationGrowthSpeed: 1,
+            vegetationWindEnabled: true,
+            vegetationWindIntensity: 0.35,
+            vegetationAlienEnabled: true,
+            vegetationDebugBiomes: false,
+            vegetationDebugClusters: false,
+            vegetationRegenerateToken: 0,
+            cosmicCometTailQuality: 'medium',
+            particleDensity: 'medium',
+            particleMultiplier: 1,
+            blackHoleLensQuality: 'medium',
+            fluidEffectsEnabled: true,
+            fluidQuality: 'medium',
+            fluidNebulasEnabled: true,
+            fluidPlasmaEnabled: true,
+            fluidExplosionsEnabled: true,
+            fluidBlackHolesEnabled: true,
+            fluidTrailsEnabled: true,
+            fluidIntensity: 0.68,
+            fluidInternalResolution: 192,
+            fluidUpdateRate: 15,
+            fluidMaxSimultaneous: 7,
+            ringDebrisEnabled: true,
+            ringDebrisDensity: 1,
+            ringDebrisQuality: 'medium',
+            ringAnimationEnabled: true,
+            powerSaveMode: false,
+            pauseWhenHidden: true,
+            decorativeRenderDistance: 160,
+            distantUpdateReduction: true,
+            maxActiveObjects: 220,
+            showFps: true,
+            showStats: true
         };
         const defaultEditorState = { ...editorState };
+        Object.assign(editorState, loadSettings(defaultEditorState));
+
+        function getCinematicLightingOptions() {
+            return {
+                enabled: editorState.cinematicLightingEnabled,
+                preset: editorState.cinematicLightingPreset,
+                toneMapping: true,
+                exposure: editorState.cinematicExposure,
+                contrast: editorState.cinematicContrast,
+                intensity: editorState.cinematicIntensity,
+                bloom: editorState.cinematicBloom,
+                bloomStrength: editorState.cinematicBloomStrength,
+                shadows: editorState.cinematicShadowQuality !== 'off',
+                shadowQuality: editorState.cinematicShadowQuality,
+                atmosphereFresnel: editorState.cinematicAtmosphereFresnel,
+                fakeReflections: editorState.cinematicFakeReflections,
+                ambientOcclusion: editorState.cinematicAmbientOcclusion
+            };
+        }
+
+        function syncCinematicLightingOptions() {
+            updateLightingSettings(getCinematicLightingOptions(), cinematicLighting);
+        }
+
+        const cinematicLighting = createCinematicLighting(scene, renderer, camera, {
+            ...getCinematicLightingOptions(),
+            composer,
+            insertBeforePass: blackHoleLensPass,
+            lights: {
+                mainLight,
+                ambientLight,
+                backLight,
+                warmFill
+            }
+        });
 
         const dinoLife = new DinoLifeSystem({
             THREE,
@@ -764,11 +941,47 @@
             spriteBasePath: './sprites/',
             settings: editorState
         });
+        const cosmicFluidEffects = createCosmicFluidEffects({
+            THREE,
+            scene,
+            camera,
+            renderer,
+            parentGroup: cosmicGroup,
+            planetRadius: PLANET_RADIUS,
+            settings: editorState
+        });
+        const vegetationSystem = new PlanetVegetationSystem({
+            THREE,
+            parentGroup: planetSurfaceGroup,
+            camera,
+            getPlanetRadius: () => PLANET_RADIUS,
+            getPlanetCenter: () => new THREE.Vector3(0, 0, 0),
+            getPlanetSurfaceHeight: (normal) => samplePlanetSurfaceHeight(normal),
+            settings: editorState
+        });
         const universeExpansion = new UniverseExpansion({
             THREE,
             parentGroup: cosmicGroup,
             camera,
-            planetRadius: PLANET_RADIUS
+            planetRadius: PLANET_RADIUS,
+            fluidEffects: cosmicFluidEffects
+        });
+        const chaosToolbar = new PlanetChaosToolbar();
+        planetChaos = new PlanetChaosSystem({
+            THREE,
+            scene,
+            camera,
+            renderer,
+            controls,
+            planetRadius: PLANET_RADIUS,
+            toolbar: chaosToolbar,
+            getPlanetMesh: () => currentPlanetMesh,
+            getPlanetSurfaceGroup: () => planetSurfaceGroup,
+            getLocalTargets: () => localChaosTargets,
+            getDinoSystem: () => dinoLife,
+            getVegetationSystem: () => vegetationSystem,
+            fluidEffects: cosmicFluidEffects,
+            performance: editorState
         });
 
         const planetPresets = {
@@ -918,6 +1131,7 @@
         function disposeObject(object) {
             object.traverse((child) => {
                 if (child.geometry) child.geometry.dispose();
+                if (child.userData?.cinematicOriginalMaterial) child.userData.cinematicOriginalMaterial.dispose();
                 if (child.material) {
                     const materials = Array.isArray(child.material) ? child.material : [child.material];
                     materials.forEach((mat) => {
@@ -927,13 +1141,18 @@
                     });
                 }
             });
+            settingsPanel?.setSettings(editorState, { save: true });
         }
 
         function clearCosmicGroup() {
+            cosmicFluidEffects.disposeVisuals?.();
             dinoLife.clearPopulation();
+            vegetationSystem?.dispose?.();
             universeExpansion.dispose();
             orbitingObjects.length = 0;
+            localChaosTargets.length = 0;
             slowSpinners.length = 0;
+            localBlackHoles.length = 0;
             while (planetSurfaceGroup.children.length) {
                 const child = planetSurfaceGroup.children[0];
                 planetSurfaceGroup.remove(child);
@@ -950,6 +1169,7 @@
             currentPlanetMesh = null;
             window.atmoMesh = null;
             surfaceSampler = null;
+            planetChaos?.setPlanet(null, null);
         }
 
         function choosePlanetProfile(seed) {
@@ -1161,6 +1381,10 @@
             const ringColor = new THREE.Color(editorState.ringColor);
             const innerRadius = PLANET_RADIUS * 1.28;
             const outerRadius = innerRadius + editorState.ringWidth * PLANET_RADIUS;
+            const localRingPlaneRotation = Math.PI / 2;
+            const ringInclinationX = Math.PI * 0.02;
+            const ringInclinationY = randomRange(random, -0.22, 0.22);
+            ringGroup.rotation.set(ringInclinationX, ringInclinationY, 0);
             const ring = new THREE.Mesh(
                 new THREE.RingGeometry(innerRadius, outerRadius, 160, 8),
                 new THREE.MeshBasicMaterial({
@@ -1173,8 +1397,7 @@
                     depthWrite: false
                 })
             );
-            ring.rotation.x = Math.PI * 0.52;
-            ring.rotation.y = randomRange(random, -0.22, 0.22);
+            ring.rotation.x = localRingPlaneRotation;
             ringGroup.add(ring);
 
             const glow = new THREE.Mesh(
@@ -1191,38 +1414,44 @@
             glow.rotation.copy(ring.rotation);
             ringGroup.add(glow);
 
-            const debrisGroup = new THREE.Group();
-            const debrisGeo = new THREE.DodecahedronGeometry(1, 0);
-            const debrisMaterials = [
-                new THREE.MeshStandardMaterial({ color: ringColor.clone().multiplyScalar(0.85), roughness: 0.95, metalness: 0.02 }),
-                new THREE.MeshStandardMaterial({ color: ringColor.clone().lerp(new THREE.Color(0xffffff), 0.28), roughness: 0.9, metalness: 0.03 }),
-                new THREE.MeshStandardMaterial({ color: ringColor.clone().lerp(new THREE.Color(0x6f6b78), 0.35), roughness: 1.0, metalness: 0.01 })
-            ];
-            const particleCount = Math.floor(180 + editorState.ringWidth * 180);
-            for (let i = 0; i < particleCount; i++) {
-                const angle = random() * Math.PI * 2;
-                const bandBias = Math.pow(random(), 1.35);
-                const radius = innerRadius + 0.05 + bandBias * (outerRadius - innerRadius);
-                const ripple = Math.sin(angle * randomRange(random, 2.0, 5.5) + currentSeed * 0.01) * randomRange(random, 0.006, 0.035) * PLANET_RADIUS;
-                const height = randomRange(random, -0.055, 0.055) * (0.45 + editorState.ringWidth) * PLANET_RADIUS;
-                const size = randomRange(random, 0.0035, 0.018) * PLANET_RADIUS * (random() > 0.96 ? 2.4 : 1);
-                const debris = new THREE.Mesh(debrisGeo, pick(random, debrisMaterials));
-                debris.position.set(Math.cos(angle) * (radius + ripple), height, Math.sin(angle) * (radius - ripple));
-                debris.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
-                debris.scale.setScalar(size);
-                debris.userData.orbitSpeed = randomRange(random, 0.00035, 0.00115) * (random() > 0.45 ? 1 : -1);
-                debris.userData.orbitRadius = radius;
-                debris.userData.orbitHeight = height;
-                debris.userData.orbitPhase = angle;
-                debris.userData.orbitWobble = randomRange(random, 0.003, 0.025);
-                debrisGroup.add(debris);
+            if (editorState.ringDebrisEnabled) {
+                const debrisGroup = new THREE.Group();
+                const richRingDebris = ['high', 'ultra', 'cinematic'].includes(editorState.ringDebrisQuality);
+                const debrisGeo = new THREE.DodecahedronGeometry(1, richRingDebris ? 1 : 0);
+                const debrisMaterials = [
+                    new THREE.MeshStandardMaterial({ color: ringColor.clone().multiplyScalar(0.85), roughness: 0.95, metalness: 0.02 }),
+                    new THREE.MeshStandardMaterial({ color: ringColor.clone().lerp(new THREE.Color(0xffffff), 0.28), roughness: 0.9, metalness: 0.03 }),
+                    new THREE.MeshStandardMaterial({ color: ringColor.clone().lerp(new THREE.Color(0x6f6b78), 0.35), roughness: 1.0, metalness: 0.01 })
+                ];
+                const ringQualityScale = { low: 0.58, medium: 1, high: 1.25, ultra: 1.55, cinematic: 1.85 };
+                const qualityScale = ringQualityScale[editorState.ringDebrisQuality] || 1;
+                const particleCount = Math.floor((180 + editorState.ringWidth * 180) * Math.max(0, editorState.ringDebrisDensity || 0) * qualityScale);
+                for (let i = 0; i < particleCount; i++) {
+                    const angle = random() * Math.PI * 2;
+                    const bandBias = Math.pow(random(), 1.35);
+                    const radius = innerRadius + 0.05 + bandBias * (outerRadius - innerRadius);
+                    const ripple = Math.sin(angle * randomRange(random, 2.0, 5.5) + currentSeed * 0.01) * randomRange(random, 0.006, 0.035) * PLANET_RADIUS;
+                    const height = randomRange(random, -0.055, 0.055) * (0.45 + editorState.ringWidth) * PLANET_RADIUS;
+                    const size = randomRange(random, 0.0035, 0.018) * PLANET_RADIUS * (random() > 0.96 ? 2.4 : 1);
+                    const debris = new THREE.Mesh(debrisGeo, pick(random, debrisMaterials));
+                    debris.position.set(Math.cos(angle) * (radius + ripple), height, Math.sin(angle) * (radius - ripple));
+                    debris.rotation.set(random() * Math.PI, random() * Math.PI, random() * Math.PI);
+                    debris.scale.setScalar(size);
+                    debris.userData.orbitSpeed = randomRange(random, 0.00035, 0.00115) * (random() > 0.45 ? 1 : -1);
+                    debris.userData.orbitRadius = radius;
+                    debris.userData.orbitHeight = height;
+                    debris.userData.orbitPhase = angle;
+                    debris.userData.orbitWobble = randomRange(random, 0.003, 0.025);
+                    debrisGroup.add(debris);
+                }
+                debrisGroup.userData.debris = true;
+                ringGroup.add(debrisGroup);
+                if (editorState.ringAnimationEnabled) orbitingObjects.push({ object: debrisGroup, speed: 0.00018 });
             }
-            debrisGroup.rotation.copy(ring.rotation);
-            debrisGroup.userData.debris = true;
-            ringGroup.add(debrisGroup);
             cosmicGroup.add(ringGroup);
-            slowSpinners.push(ringGroup);
-            orbitingObjects.push({ object: debrisGroup, speed: 0.00018 });
+            ringGroup.userData.planetChaosTarget = 'rings';
+            localChaosTargets.push(ringGroup);
+            if (editorState.ringAnimationEnabled) slowSpinners.push(ringGroup);
         }
 
         function createMoon(random, index, total) {
@@ -1241,7 +1470,9 @@
             moon.position.set(Math.cos(angle) * distance, randomRange(random, -0.34, 0.34) * PLANET_RADIUS, Math.sin(angle) * distance);
             pivot.rotation.z = randomRange(random, -0.22, 0.22);
             pivot.add(moon);
+            moon.userData.planetChaosTarget = 'moon';
             cosmicGroup.add(pivot);
+            localChaosTargets.push(pivot);
             orbitingObjects.push({ object: pivot, speed: randomRange(random, 0.0012, 0.0032) * editorState.moonSpeed * (index % 2 ? -1 : 1) });
             slowSpinners.push(moon);
         }
@@ -1345,7 +1576,7 @@
             return texture;
         }
 
-        function createBlackHoleVisual(seed, options = {}) {
+        function createAdvancedBlackHoleVisual(seed, options = {}) {
             const scale = options.scale ?? 1;
             const diskColor = options.diskColor || editorState.ringColor || '#ff9c4d';
             const group = new THREE.Group();
@@ -1405,19 +1636,55 @@
             group.userData.disk = disk;
             group.userData.photonRing = photonRing;
             group.userData.lens = lens;
+            group.userData.lensRadius = options.lensRadius ?? 1.12 * scale;
+            group.userData.lensStrength = options.lensStrength ?? 0.18;
+            localBlackHoles.push({
+                group,
+                lensRadius: group.userData.lensRadius,
+                strength: group.userData.lensStrength
+            });
             return group;
         }
 
+        function collectLocalBlackHoleLensData(maxCount = 5) {
+            const lenses = [];
+            camera.updateMatrixWorld();
+            lensCameraRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+            for (const blackHole of localBlackHoles) {
+                if (!blackHole.group.parent || blackHole.group.visible === false) continue;
+                blackHole.group.getWorldPosition(lensTempCenter);
+                lensTempProjected.copy(lensTempCenter).project(camera);
+                if (lensTempProjected.z < -1 || lensTempProjected.z > 1) continue;
+                lensTempEdge.copy(lensTempCenter).addScaledVector(lensCameraRight, blackHole.lensRadius);
+                const edgeProjected = lensTempEdge.project(camera);
+                const radius = Math.min(0.34, Math.max(0.06, Math.abs(edgeProjected.x - lensTempProjected.x) * 0.72));
+                lenses.push({
+                    x: lensTempProjected.x * 0.5 + 0.5,
+                    y: lensTempProjected.y * 0.5 + 0.5,
+                    radius,
+                    strength: blackHole.strength
+                });
+                if (lenses.length >= maxCount) break;
+            }
+            return lenses;
+        }
+
         function createBlackHole(random) {
-            const group = createBlackHoleVisual(currentSeed + Math.floor(random() * 10000), {
+            const group = createAdvancedBlackHoleVisual(currentSeed + Math.floor(random() * 10000), {
                 scale: randomRange(random, 0.28, 0.42) * PLANET_RADIUS,
                 diskOpacity: 0.7,
                 incline: randomRange(random, 0.52, 0.66),
                 twist: randomRange(random, -0.5, 0.5),
-                jets: random() > 0.65
+                jets: random() > 0.65,
+                lensStrength: randomRange(random, 0.15, 0.22)
             });
             group.position.set(randomRange(random, 5.2, 7.8) * PLANET_RADIUS, randomRange(random, -2.8, 2.4) * PLANET_RADIUS, randomRange(random, -7.4, -5.4) * PLANET_RADIUS);
             cosmicGroup.add(group);
+            cosmicFluidEffects.attachBlackHoleFluid?.(group, {
+                scale: group.userData.lensRadius * 1.4,
+                color: 0xffa45f,
+                opacity: 0.22
+            });
             slowSpinners.push(group);
         }
 
@@ -1516,6 +1783,7 @@
 
         function buildCosmicScene(seed, profile) {
             const random = createSeededRandom(seed + 424242);
+            const objectBudgetScale = Math.max(0.25, Math.min(1, Number(editorState.maxActiveObjects || 220) / 220));
             createSun(random);
             if (editorState.nebulaEnabled && editorState.nebulaIntensity > 0.01) {
                 createSprite(createNebulaTexture(seed + 7, randomRange(random, 185, 225), randomRange(random, 285, 330)), new THREE.Vector3(-5.8, 1.4, -10.5).multiplyScalar(PLANET_RADIUS), 8.8 * PLANET_RADIUS, 0.62 * editorState.nebulaIntensity);
@@ -1532,10 +1800,11 @@
             if (editorState.ringsEnabled && supportsSaturnRings) createRings(random, profile);
             const moonCount = editorState.moonsEnabled && supportsSaturnRings ? Math.min(6, Math.floor(editorState.moonCount)) : 0;
             for (let i = 0; i < moonCount; i++) createMoon(random, i, moonCount);
-            for (let i = 0; i < editorState.distantPlanets; i++) createDistantPlanet(random);
-            createAsteroidField(random, editorState.asteroidCount);
-            for (let i = 0; i < editorState.comets; i++) createComet(random);
-            for (let i = 0; i < editorState.blackHoles; i++) createBlackHole(random);
+            for (let i = 0; i < Math.floor(editorState.distantPlanets * objectBudgetScale); i++) createDistantPlanet(random);
+            createAsteroidField(random, Math.floor(editorState.asteroidCount * objectBudgetScale));
+            for (let i = 0; i < Math.floor(editorState.comets * objectBudgetScale); i++) createComet(random);
+            cosmicFluidEffects.rebuild?.(seed, editorState);
+            for (let i = 0; i < Math.floor(editorState.blackHoles * objectBudgetScale); i++) createBlackHole(random);
             universeExpansion.rebuild(seed, editorState);
             createCloudLayer(seed, profile);
             if (random() < 0.45) createAurora(profile);
@@ -1750,7 +2019,7 @@
         }
 
         function createCentralBlackHole(seed, profile) {
-            const group = createBlackHoleVisual(seed + 777, {
+            const group = createAdvancedBlackHoleVisual(seed + 777, {
                 scale: 1.12 * PLANET_RADIUS,
                 diskColor: editorState.ringColor,
                 diskOpacity: Math.max(0.76, editorState.ringOpacity),
@@ -1763,6 +2032,11 @@
             slowSpinners.push(group);
             createSprite(createGlowTexture('rgba(255,190,95,0.72)', 'rgba(255,80,30,0.08)'), new THREE.Vector3(0, 0, 0), 5.2 * PLANET_RADIUS, 0.58);
             buildCosmicScene(seed, profile);
+            cosmicFluidEffects.attachBlackHoleFluid?.(group, {
+                scale: PLANET_RADIUS * 3.4,
+                color: editorState.ringColor || 0xff9c4d,
+                opacity: 0.28
+            });
         }
 
         function calculatePlanetSurfaceOffset(normal, profile, simplex) {
@@ -1798,12 +2072,16 @@
 
             if (currentProfile.type === 'star') {
                 createCentralStar(seed, currentProfile);
+                planetChaos?.setPlanet(currentPlanetMesh?.isMesh ? currentPlanetMesh : null, planetSurfaceGroup);
+                vegetationSystem.generateForPlanet({ seed, profile: currentProfile, planetMesh: currentPlanetMesh });
                 dinoLife.setPlanetInfo({ radius: PLANET_RADIUS, seed, profile: currentProfile, planetMesh: currentPlanetMesh });
                 dinoLife.regeneratePopulation();
                 return;
             }
             if (currentProfile.type === 'blackhole') {
                 createCentralBlackHole(seed, currentProfile);
+                planetChaos?.setPlanet(currentPlanetMesh?.isMesh ? currentPlanetMesh : null, planetSurfaceGroup);
+                vegetationSystem.generateForPlanet({ seed, profile: currentProfile, planetMesh: currentPlanetMesh });
                 dinoLife.setPlanetInfo({ radius: PLANET_RADIUS, seed, profile: currentProfile, planetMesh: currentPlanetMesh });
                 dinoLife.regeneratePopulation();
                 return;
@@ -1880,6 +2158,7 @@
             planet.receiveShadow = false;
             planetSurfaceGroup.add(planet);
             currentPlanetMesh = planet;
+            planetChaos?.setPlanet(currentPlanetMesh, planetSurfaceGroup);
             
             // Adiciona uma atmosfera sutil (efeito de brilho)
             const atmosGeometry = new THREE.SphereGeometry(PLANET_RADIUS * 1.012, 64, 64);
@@ -1910,6 +2189,7 @@
             slowSpinners.push(halo);
 
             buildCosmicScene(seed, currentProfile);
+            vegetationSystem.generateForPlanet({ seed, profile: currentProfile, planetMesh: currentPlanetMesh });
             dinoLife.setPlanetInfo({ radius: PLANET_RADIUS, seed, profile: currentProfile, planetMesh: currentPlanetMesh });
             dinoLife.regeneratePopulation();
         }
@@ -1921,9 +2201,23 @@
         
         // Função para randomizar completamente o planeta
         const controlIds = Object.keys(editorState);
-        const dinoControlKeys = ['lifeEnabled', 'lifeType', 'dinoSpecies', 'dinoCount', 'dinoScale', 'dinoMoveSpeed', 'dinoRenderDistance', 'dinoAnimateDistance'];
-        const cosmicControlKeys = ['cosmicBlackHolesEnabled', 'cosmicCometsEnabled', 'cosmicNebulasEnabled', 'cosmicStationsEnabled', 'cosmicPlanetsEnabled', 'cosmicOrbitLinesEnabled', 'cosmicLensDistortionEnabled', 'cosmicCometCount', 'cosmicCometTailIntensity', 'cosmicPlanetCount', 'cosmicStationCount', 'cosmicBlackHoleCount'];
+        const dinoControlKeys = ['lifeEnabled', 'lifeType', 'dinoSpecies', 'dinoCount', 'dinoScale', 'dinoMoveSpeed', 'dinoRenderDistance', 'dinoAnimateDistance', 'dinoAnimationEnabled', 'dinoPseudo3dEnabled', 'dinoBillboardFollow', 'dinoMaxSideAngle', 'dinoDistanceCulling', 'dinoMaxActive', 'dinoSpriteQuality', 'dinoDebugVisible'];
+        const dinoRegenerateKeys = ['lifeEnabled', 'lifeType', 'dinoSpecies', 'dinoCount', 'dinoScale'];
+        const vegetationControlKeys = ['vegetationEnabled', 'vegetationDensity', 'vegetationRenderDistance', 'vegetationQuality', 'vegetationBiomeVariety', 'vegetationForestIntensity', 'vegetationScenicEnabled', 'vegetationScenicIntensity', 'vegetationGrowthEnabled', 'vegetationRegrowthEnabled', 'vegetationGrowthSpeed', 'vegetationWindEnabled', 'vegetationWindIntensity', 'vegetationAlienEnabled', 'vegetationDebugBiomes', 'vegetationDebugClusters', 'vegetationRegenerateToken'];
+        const cosmicControlKeys = ['cosmicBlackHolesEnabled', 'cosmicCometsEnabled', 'cosmicNebulasEnabled', 'cosmicStationsEnabled', 'cosmicPlanetsEnabled', 'cosmicOrbitLinesEnabled', 'cosmicLensDistortionEnabled', 'cosmicCometCount', 'cosmicCometTailIntensity', 'cosmicCometTailQuality', 'particleDensity', 'particleMultiplier', 'cosmicPlanetCount', 'cosmicStationCount', 'cosmicBlackHoleCount', 'blackHoleLensQuality'];
+        const fluidControlKeys = ['fluidEffectsEnabled', 'fluidQuality', 'fluidNebulasEnabled', 'fluidPlasmaEnabled', 'fluidExplosionsEnabled', 'fluidBlackHolesEnabled', 'fluidTrailsEnabled', 'fluidIntensity', 'fluidInternalResolution', 'fluidUpdateRate', 'fluidMaxSimultaneous'];
+        const graphicsLiveKeys = ['graphicsPreset', 'internalResolution', 'pixelRatioMode', 'targetFps', 'autoPerformanceOptimization', 'powerSaveMode', 'pauseWhenHidden', 'chaosQuality', 'chaosMaxEffects', 'chaosMaxFragments', 'decorativeRenderDistance', 'distantUpdateReduction', 'maxActiveObjects', 'showFps', 'showStats', ...fluidControlKeys, ...vegetationControlKeys];
+        const lightingLiveKeys = ['starDensity', 'starBrightness', 'starSize', 'backgroundColor', 'ambientIntensity', 'lightIntensity', 'exposure', 'cinematicLightingEnabled', 'cinematicExposure', 'cinematicContrast', 'cinematicIntensity', 'cinematicBloom', 'cinematicBloomStrength', 'cinematicAtmosphereFresnel', 'cinematicFakeReflections', 'cinematicShadowQuality', 'cinematicAmbientOcclusion'];
+        const regenerateSettingKeys = ['cloudsEnabled', 'cloudOpacity', 'atmosphereIntensity', 'atmosphereColor', 'ringsEnabled', 'ringWidth', 'ringOpacity', 'ringColor', 'ringDebrisEnabled', 'ringDebrisDensity', 'ringDebrisQuality', 'ringAnimationEnabled', 'nebulaEnabled', 'nebulaIntensity', 'galaxyEnabled', 'distantPlanets', 'asteroidCount', 'comets', 'blackHoles', ...cosmicControlKeys];
+        const persistentSettingKeys = [...new Set([...graphicsLiveKeys, ...lightingLiveKeys, ...dinoControlKeys, ...regenerateSettingKeys])];
         let regenerateTimer = null;
+        let settingsPanel = null;
+
+        function snapshotEditorKeys(keys) {
+            const snapshot = {};
+            keys.forEach((key) => snapshot[key] = editorState[key]);
+            return snapshot;
+        }
 
         function syncControlsFromState() {
             controlIds.forEach((key) => {
@@ -1948,6 +2242,108 @@
             return el.value;
         }
 
+        function getBasePixelRatio() {
+            if (editorState.pixelRatioMode === 'auto') return Math.min(window.devicePixelRatio || 1, 2);
+            return Math.max(0.5, Number(editorState.pixelRatioMode) || 1);
+        }
+
+        function getEffectiveInternalResolution() {
+            const energyScale = editorState.powerSaveMode ? 0.75 : 1;
+            return Math.max(0.5, Math.min(1.5, Number(editorState.internalResolution || 1) * energyScale));
+        }
+
+        function applyGraphicsSettings() {
+            const internalResolution = getEffectiveInternalResolution();
+            const effectivePixelRatio = Math.min(3, getBasePixelRatio() * internalResolution);
+            renderer.setPixelRatio(effectivePixelRatio);
+            composer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function getLensMaxCount() {
+            if (!editorState.cosmicLensDistortionEnabled) return 0;
+            if (editorState.blackHoleLensQuality === 'low') return 2;
+            if (['high', 'ultra', 'cinematic'].includes(editorState.blackHoleLensQuality)) return 5;
+            return 3;
+        }
+
+        function getPerformanceStats() {
+            const universeStats = universeExpansion.getStats?.() || { particles: 0, decorativeObjects: 0 };
+            const chaosStats = planetChaos?.getStats?.() || { effects: 0, fragments: 0 };
+            const fluidStats = cosmicFluidEffects.getStats?.() || { activeFluidEffects: 0 };
+            const vegetationStats = vegetationSystem.getStats?.() || { instances: 0, chunks: 0 };
+            const localParticles = localBlackHoles.length * 64 + Math.floor(starCount * editorState.starDensity) + Math.floor(120 * editorState.starDensity);
+            return {
+                fps: currentFps,
+                activeDinos: dinoLife.activeCount || 0,
+                particles: universeStats.particles + localParticles + chaosStats.effects,
+                chaosObjects: chaosStats.effects,
+                chaosFragments: chaosStats.fragments,
+                vegetationObjects: vegetationStats.instances,
+                decorativeObjects: universeStats.decorativeObjects + slowSpinners.length + orbitingObjects.length + chaosStats.fragments + fluidStats.activeFluidEffects + vegetationStats.chunks,
+                internalResolution: getEffectiveInternalResolution()
+            };
+        }
+
+        function rebuildFluidEffects(seed = currentSeed || 1) {
+            cosmicFluidEffects.rebuild?.(seed, editorState);
+            if (!editorState.fluidEffectsEnabled || !editorState.fluidBlackHolesEnabled) return;
+            localBlackHoles.forEach((blackHole) => {
+                cosmicFluidEffects.attachBlackHoleFluid?.(blackHole.group, {
+                    scale: (blackHole.lensRadius || PLANET_RADIUS * 2.4) * 1.4,
+                    color: editorState.ringColor || 0xff9c4d,
+                    opacity: 0.24
+                });
+            });
+            universeExpansion.blackHoles?.forEach((blackHole) => {
+                cosmicFluidEffects.attachBlackHoleFluid?.(blackHole.group, {
+                    scale: (blackHole.lensRadius || PLANET_RADIUS * 2.8) * 1.25,
+                    color: 0xffa45f,
+                    opacity: 0.22
+                });
+            });
+        }
+
+        function applySettingsFromPanel(settings, meta = {}) {
+            Object.assign(editorState, settings);
+            if (meta.key === 'graphicsPreset') {
+                const applied = applyLightingPreset(editorState.cinematicLightingPreset, cinematicLighting);
+                Object.assign(editorState, {
+                    cinematicLightingPreset: applied.preset,
+                    cinematicExposure: applied.exposure,
+                    cinematicContrast: applied.contrast,
+                    cinematicIntensity: applied.intensity,
+                    cinematicBloom: applied.bloom,
+                    cinematicBloomStrength: editorState.cinematicBloomStrength,
+                    cinematicShadowQuality: editorState.cinematicShadowQuality,
+                    cinematicAmbientOcclusion: editorState.cinematicAmbientOcclusion
+                });
+            }
+            applyGraphicsSettings();
+            if (fluidControlKeys.includes(meta.key) || meta.key === 'reset' || meta.key === 'graphicsPreset') {
+                rebuildFluidEffects(currentSeed || 1);
+            } else {
+                cosmicFluidEffects.configure?.(editorState);
+            }
+            planetChaos?.configure(editorState);
+            if (meta.key === 'vegetationRegenerateToken') {
+                vegetationSystem.generateForPlanet({ seed: currentSeed || 1, profile: currentProfile, planetMesh: currentPlanetMesh });
+            } else if (vegetationControlKeys.includes(meta.key) || meta.key === 'reset' || meta.key === 'graphicsPreset') {
+                vegetationSystem.updateSettings(editorState);
+            }
+            applyLiveEnvironmentSettings();
+            dinoLife.updateSettings(editorState);
+            universeExpansion.updateSettings?.(editorState);
+            syncControlsFromState();
+            saveSettings(editorState);
+
+            if (dinoRegenerateKeys.includes(meta.key)) {
+                dinoLife.regeneratePopulation();
+            }
+            if (regenerateSettingKeys.includes(meta.key) || meta.key === 'reset' || meta.key === 'graphicsPreset') {
+                scheduleRegenerate(90);
+            }
+        }
+
         function applyLiveEnvironmentSettings() {
             scene.background = new THREE.Color(editorState.backgroundColor);
             renderer.toneMappingExposure = editorState.exposure;
@@ -1959,6 +2355,7 @@
             brightStars.material.size = editorState.starSize * 2.55;
             starGeometry.setDrawRange(0, Math.floor(starCount * editorState.starDensity));
             brightStarGeometry.setDrawRange(0, Math.floor(120 * editorState.starDensity));
+            syncCinematicLightingOptions();
         }
 
         function scheduleRegenerate(delay = 140) {
@@ -1971,13 +2368,14 @@
 
         function applyPlanetPreset(name) {
             currentThemeName = 'Manual';
+            const persistentSnapshot = snapshotEditorKeys(persistentSettingKeys);
             const universeSnapshot = {};
             Object.keys(universePresets.deep).forEach((key) => universeSnapshot[key] = editorState[key]);
             cosmicControlKeys.forEach((key) => universeSnapshot[key] = editorState[key]);
             universeSnapshot.universePreset = editorState.universePreset;
             const dinoSnapshot = {};
             dinoControlKeys.forEach((key) => dinoSnapshot[key] = editorState[key]);
-            Object.assign(editorState, defaultEditorState, universeSnapshot, dinoSnapshot, planetPresets[name] || planetPresets.earth);
+            Object.assign(editorState, defaultEditorState, universeSnapshot, dinoSnapshot, planetPresets[name] || planetPresets.earth, persistentSnapshot);
             editorState.planetPreset = name;
             syncControlsFromState();
             scheduleRegenerate(40);
@@ -1995,6 +2393,7 @@
         function applyArtTheme(theme, seed) {
             currentThemeName = theme.name;
             const random = createSeededRandom(seed + 9001);
+            const persistentSnapshot = snapshotEditorKeys(persistentSettingKeys);
             const dinoSnapshot = {};
             dinoControlKeys.forEach((key) => dinoSnapshot[key] = editorState[key]);
             Object.assign(editorState, defaultEditorState);
@@ -2008,6 +2407,7 @@
             applyThemeValues(editorState, theme.universe, random);
             editorState.moonsEnabled = editorState.moonCount > 0;
             editorState.cloudsEnabled = editorState.cloudOpacity > 0.03 && !['gas', 'star', 'blackhole'].includes(editorState.objectType);
+            Object.assign(editorState, persistentSnapshot);
             syncControlsFromState();
         }
 
@@ -2027,6 +2427,22 @@
                         applyUniversePreset(el.value);
                         return;
                     }
+                    if (key === 'cinematicLightingPreset') {
+                        const applied = applyLightingPreset(el.value, cinematicLighting);
+                        Object.assign(editorState, {
+                            cinematicLightingPreset: applied.preset,
+                            cinematicExposure: applied.exposure,
+                            cinematicContrast: applied.contrast,
+                            cinematicIntensity: applied.intensity,
+                            cinematicBloom: applied.bloom,
+                            cinematicBloomStrength: applied.bloomStrength,
+                            cinematicShadowQuality: applied.shadowQuality || (applied.shadows ? 'medium' : 'off'),
+                            cinematicAmbientOcclusion: applied.ambientOcclusion
+                        });
+                        syncControlsFromState();
+                        applyLiveEnvironmentSettings();
+                        return;
+                    }
                     currentThemeName = 'Manual';
                     editorState[key] = readControlValue(el);
                     if (key === 'objectType') {
@@ -2036,15 +2452,33 @@
                     syncControlsFromState();
                     if (dinoControlKeys.includes(key)) {
                         dinoLife.updateSettings(editorState);
-                        if (['lifeEnabled', 'lifeType', 'dinoSpecies', 'dinoCount', 'dinoScale'].includes(key)) {
+                        if (dinoRegenerateKeys.includes(key)) {
                             dinoLife.regeneratePopulation();
                         }
                         return;
                     }
-                    if (['starDensity', 'starBrightness', 'starSize', 'backgroundColor', 'ambientIntensity', 'exposure'].includes(key)) {
+                    if (graphicsLiveKeys.includes(key)) {
+                        applyGraphicsSettings();
+                        if (fluidControlKeys.includes(key)) {
+                            rebuildFluidEffects(currentSeed || 1);
+                        } else {
+                            cosmicFluidEffects.configure?.(editorState);
+                        }
+                        if (vegetationControlKeys.includes(key)) {
+                            vegetationSystem.updateSettings(editorState);
+                        }
+                        planetChaos?.configure(editorState);
+                        return;
+                    }
+                    if (lightingLiveKeys.includes(key)) {
                         applyLiveEnvironmentSettings();
+                        return;
                     }
                     if (key === 'cosmicLensDistortionEnabled') return;
+                    if (regenerateSettingKeys.includes(key)) {
+                        scheduleRegenerate(key === 'rotationSpeed' ? 260 : 160);
+                        return;
+                    }
                     scheduleRegenerate(key === 'rotationSpeed' ? 260 : 160);
                 });
             });
@@ -2054,6 +2488,20 @@
                 const hidden = document.body.classList.contains('wallpaper-mode');
                 document.getElementById('toggleUiBtn').innerHTML = hidden ? '<i class="fas fa-eye-slash"></i>' : '<i class="fas fa-eye"></i>';
             });
+
+            const settingsButton = document.getElementById('toggleSettingsBtn');
+            const syncSettingsPanelState = () => {
+                const open = Boolean(settingsPanel?.element?.open);
+                document.body.classList.toggle('settings-open', open);
+                settingsButton?.classList.toggle('active', open);
+            };
+            settingsButton?.addEventListener('click', () => {
+                if (!settingsPanel?.element) return;
+                settingsPanel.element.open = !settingsPanel.element.open;
+                syncSettingsPanelState();
+            });
+            settingsPanel?.element?.addEventListener('toggle', syncSettingsPanelState);
+            syncSettingsPanelState();
 
             document.getElementById('regenerateDinosBtn').addEventListener('click', () => {
                 dinoLife.updateSettings(editorState);
@@ -2075,8 +2523,38 @@
             controls.target.set(0, 0, 0);
             controls.update();
         }
+
+        function resetAllSettings() {
+            const reset = resetSettings(defaultEditorState);
+            Object.assign(editorState, reset);
+            return { ...editorState };
+        }
+
+        let autoOptimizationNoticeTimer = null;
+        function showAutoOptimizationNotice(message) {
+            let notice = document.getElementById('autoOptimizationNotice');
+            if (!notice) {
+                notice = document.createElement('div');
+                notice.id = 'autoOptimizationNotice';
+                notice.style.cssText = 'position:absolute;left:50%;top:18px;transform:translateX(-50%);z-index:30;max-width:min(520px,calc(100vw - 32px));padding:10px 14px;border:1px solid rgba(140,180,255,.38);border-radius:8px;background:rgba(5,10,24,.82);color:#eef4ff;font:600 12px Space Grotesk,sans-serif;box-shadow:0 12px 40px rgba(0,0,0,.35);pointer-events:none;opacity:0;transition:opacity .2s ease;';
+                document.body.appendChild(notice);
+            }
+            notice.textContent = message;
+            notice.style.opacity = '1';
+            clearTimeout(autoOptimizationNoticeTimer);
+            autoOptimizationNoticeTimer = setTimeout(() => {
+                notice.style.opacity = '0';
+            }, 2600);
+        }
         
         // Criar primeiro planeta aleatório
+        settingsPanel = createSettingsPanel({
+            initialSettings: editorState,
+            onSettingsChanged: applySettingsFromPanel,
+            onReset: resetAllSettings,
+            getStats: getPerformanceStats
+        });
+        applyGraphicsSettings();
         setupEditorControls();
         randomizePlanet();
         
@@ -2090,10 +2568,84 @@
         
         // Animação suave: rotação lenta do planeta + estrelas e anel
         let time = 0;
+        let lastRenderStamp = 0;
+        let fpsAccumulator = 0;
+        let fpsFrames = 0;
+        let fpsLastSample = performance.now();
+        let currentFps = 0;
+        let autoQualityCooldown = 0;
         function animate() {
             requestAnimationFrame(animate);
+            const now = performance.now();
+            if (editorState.pauseWhenHidden && document.hidden) return;
+            const targetFps = editorState.powerSaveMode ? 30 : editorState.targetFps;
+            if (targetFps !== 'unlimited') {
+                const frameInterval = 1000 / Number(targetFps || 60);
+                if (lastRenderStamp && now - lastRenderStamp < frameInterval * 0.92) return;
+            }
+            lastRenderStamp = now;
             const deltaTime = Math.min(0.05, clock.getDelta());
             time += 0.005;
+            fpsAccumulator += deltaTime;
+            fpsFrames++;
+            if (now - fpsLastSample >= 500) {
+                currentFps = fpsFrames / Math.max(0.001, fpsAccumulator);
+                fpsAccumulator = 0;
+                fpsFrames = 0;
+                fpsLastSample = now;
+                settingsPanel?.updateStats(getPerformanceStats());
+                autoQualityCooldown -= 0.5;
+                if (editorState.autoPerformanceOptimization && currentFps > 0 && currentFps < 34 && autoQualityCooldown <= 0) {
+                    if (editorState.internalResolution > 0.75) {
+                        editorState.internalResolution = Math.max(0.75, Number(editorState.internalResolution) - 0.25);
+                        applyGraphicsSettings();
+                        syncControlsFromState();
+                        settingsPanel?.setSettings(editorState, { save: true });
+                        showAutoOptimizationNotice('Otimizacao automatica reduziu a resolucao interna para melhorar FPS.');
+                        autoQualityCooldown = 4;
+                    }
+                    if (editorState.particleMultiplier > 0.55) {
+                        editorState.particleMultiplier = Math.max(0.55, Number(editorState.particleMultiplier) - 0.15);
+                        syncControlsFromState();
+                        settingsPanel?.setSettings(editorState, { save: true });
+                        showAutoOptimizationNotice('Otimizacao automatica reduziu particulas para melhorar FPS.');
+                        scheduleRegenerate(120);
+                        autoQualityCooldown = 4;
+                    }
+                    if (planetChaos) {
+                        editorState.chaosQuality = 'low';
+                        editorState.chaosMaxEffects = Math.max(20, Math.floor(Number(editorState.chaosMaxEffects || 72) * 0.72));
+                        editorState.chaosMaxFragments = Math.max(10, Math.floor(Number(editorState.chaosMaxFragments || 56) * 0.65));
+                        planetChaos.configure(editorState);
+                        planetChaos.reduceQualityStep?.();
+                        syncControlsFromState();
+                        settingsPanel?.setSettings(editorState, { save: true });
+                        showAutoOptimizationNotice('Otimizacao automatica reduziu efeitos de caos para melhorar FPS.');
+                        autoQualityCooldown = 4;
+                    }
+                    if (editorState.fluidEffectsEnabled) {
+                        const fluidPatch = cosmicFluidEffects.reduceQualityStep?.();
+                        if (fluidPatch) {
+                            Object.assign(editorState, fluidPatch);
+                            cosmicFluidEffects.configure?.(editorState);
+                            syncControlsFromState();
+                            settingsPanel?.setSettings(editorState, { save: true });
+                            showAutoOptimizationNotice('Otimizacao automatica reduziu efeitos fluidos para melhorar FPS.');
+                            autoQualityCooldown = 4;
+                        }
+                    }
+                    if (editorState.vegetationEnabled && editorState.vegetationDensity !== 'low') {
+                        const vegetationPatch = vegetationSystem.reduceQualityStep?.();
+                        if (vegetationPatch) {
+                            Object.assign(editorState, vegetationPatch);
+                            syncControlsFromState();
+                            settingsPanel?.setSettings(editorState, { save: true });
+                            showAutoOptimizationNotice('Otimizacao automatica reduziu vegetacao para melhorar FPS.');
+                            autoQualityCooldown = 4;
+                        }
+                    }
+                }
+            }
             
             if (currentPlanetMesh) {
                 if (currentProfile?.type === 'blackhole') {
@@ -2119,7 +2671,9 @@
                     });
                 }
             });
+            const reduceDistantUpdates = editorState.distantUpdateReduction && camera.position.length() > PLANET_RADIUS * 7;
             slowSpinners.forEach((object, index) => {
+                if (reduceDistantUpdates && index % 2 === Math.floor(time * 10) % 2) return;
                 if (object.userData?.cloudLayer) {
                     object.rotation.y += object.userData.cloudSpeed;
                     object.rotation.z += object.userData.cloudDrift;
@@ -2146,13 +2700,31 @@
             nebulaRing.rotation.z += 0.0004;
             nebulaRing.rotation.x += 0.0002;
             dinoLife.update(deltaTime);
+            vegetationSystem.update(deltaTime, camera);
             universeExpansion.update(deltaTime, time);
+            planetChaos?.update(deltaTime);
+            cosmicFluidEffects.update(deltaTime, time);
             
             controls.update(); // atualiza se houver interação
-            const lensData = editorState.cosmicLensDistortionEnabled ? universeExpansion.collectLensData(2) : [];
+            updateCinematicLighting(deltaTime, cinematicLighting, {
+                sunPosition: mainLight.position,
+                planetMesh: currentPlanetMesh?.isMesh ? currentPlanetMesh : null,
+                atmosphereMesh: window.atmoMesh,
+                profile: currentProfile,
+                waterLevel: editorState.waterLevel,
+                atmosphereColor: editorState.atmosphereColor,
+                atmosphereIntensity: editorState.atmosphereIntensity,
+                baseLightIntensity: editorState.lightIntensity,
+                baseAmbientIntensity: editorState.ambientIntensity
+            });
+            const lensMaxCount = getLensMaxCount();
+            const lensData = lensMaxCount > 0 ? [...collectLocalBlackHoleLensData(lensMaxCount), ...universeExpansion.collectLensData(lensMaxCount)].slice(0, lensMaxCount) : [];
             blackHoleLensPass.uniforms.lensCount.value = lensData.length;
             blackHoleLensPass.uniforms.lensA.value.set(lensData[0]?.x || 0, lensData[0]?.y || 0, lensData[0]?.radius || 0, lensData[0]?.strength || 0);
             blackHoleLensPass.uniforms.lensB.value.set(lensData[1]?.x || 0, lensData[1]?.y || 0, lensData[1]?.radius || 0, lensData[1]?.strength || 0);
+            blackHoleLensPass.uniforms.lensC.value.set(lensData[2]?.x || 0, lensData[2]?.y || 0, lensData[2]?.radius || 0, lensData[2]?.strength || 0);
+            blackHoleLensPass.uniforms.lensD.value.set(lensData[3]?.x || 0, lensData[3]?.y || 0, lensData[3]?.radius || 0, lensData[3]?.strength || 0);
+            blackHoleLensPass.uniforms.lensE.value.set(lensData[4]?.x || 0, lensData[4]?.y || 0, lensData[4]?.radius || 0, lensData[4]?.strength || 0);
             blackHoleLensPass.uniforms.time.value = time;
             composer.render(deltaTime);
         }
@@ -2165,6 +2737,7 @@
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+            applyGraphicsSettings();
             composer.setSize(window.innerWidth, window.innerHeight);
             blackHoleLensPass.uniforms.resolution.value.set(window.innerWidth, window.innerHeight);
         }

@@ -1,6 +1,9 @@
 const DIRECTIONS = ['E', 'NE', 'N', 'NW', 'W', 'SW', 'S', 'SE'];
 const DIRECTION_ANGLES = { E: 0, NE: 45, N: 90, NW: 135, W: 180, SW: 225, S: 270, SE: 315 };
 const DEFAULT_SPECIES = ['Blue Raptor', 'T-Rex', 'Triceratops'];
+const DINO_BILLBOARD_FOLLOW_FACTOR = 0.7;
+const DINO_MAX_SIDE_ANGLE = Math.PI * 65 / 180;
+const DINO_BILLBOARD_EPSILON = 0.000001;
 
 function anim(folder, fps = 8) {
     return { folder, prefix: folder, fps, start: 1, end: 29, step: 2, pad: 3, extension: 'png' };
@@ -41,6 +44,14 @@ function makeRandom(seed) {
 
 function randomRange(random, min, max) {
     return min + random() * (max - min);
+}
+
+function clampValue(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function normalizeAngle(angle) {
+    return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
 
 function randomUnitVector(THREE, random) {
@@ -128,14 +139,17 @@ export class DinoLifeSystem {
         this.parentGroup.add(this.group);
         this.population = [];
         this.planetInfo = { radius: 1, seed: 1, profile: null, planetMesh: null };
-        this.tmpCameraDir = new this.THREE.Vector3();
         this.tmpCenter = new this.THREE.Vector3();
         this.tmpWorldCenter = new this.THREE.Vector3();
         this.tmpWorldPosition = new this.THREE.Vector3();
         this.tmpWorldNormal = new this.THREE.Vector3();
+        this.tmpCameraWorld = new this.THREE.Vector3();
         this.tmpLocalCamera = new this.THREE.Vector3();
+        this.tmpLocalTangent = new this.THREE.Vector3();
+        this.tmpInverseQuaternion = new this.THREE.Quaternion();
         this.surfaceUp = new this.THREE.Vector3(0, 1, 0);
         this.maxActive = 80;
+        this.activeCount = 0;
     }
 
     setPlanetInfo(info) {
@@ -144,17 +158,26 @@ export class DinoLifeSystem {
 
     updateSettings(settings) {
         this.settings = settings || this.settings;
+        this.maxActive = Math.min(120, Math.max(1, Math.floor(this.settings.dinoMaxActive || this.maxActive || 80)));
     }
 
     clearPopulation() {
         this.population.length = 0;
         while (this.group.children.length) {
             const child = this.group.children[0];
+            const geometries = new Set();
+            const materials = new Set();
             this.group.remove(child);
             child.traverse((node) => {
-                if (node.geometry) node.geometry.dispose();
-                if (node.material) node.material.dispose();
+                if (node.geometry) geometries.add(node.geometry);
+                if (Array.isArray(node.material)) {
+                    node.material.forEach((material) => materials.add(material));
+                } else if (node.material) {
+                    materials.add(node.material);
+                }
             });
+            geometries.forEach((geometry) => geometry.dispose());
+            materials.forEach((material) => material.dispose());
         }
     }
 
@@ -163,6 +186,7 @@ export class DinoLifeSystem {
         if (!this.shouldRunForPlanet()) return;
         const random = makeRandom((this.planetInfo.seed || 1) + 70177);
         const speciesList = this.getSelectedSpecies();
+        this.maxActive = Math.min(120, Math.max(1, Math.floor(this.settings.dinoMaxActive || this.maxActive || 80)));
         const count = Math.min(120, Math.max(0, Math.floor(this.settings.dinoCount || 0)));
         for (let i = 0; i < count; i++) {
             const species = speciesList[Math.floor(random() * speciesList.length)] || DEFAULT_SPECIES[0];
@@ -190,13 +214,15 @@ export class DinoLifeSystem {
         const scale = this.getSpeciesScale(species) * (this.settings.dinoScale || 1);
         const material = new THREE.MeshBasicMaterial({
             transparent: true,
-            alphaTest: 0.08,
+            alphaTest: 0.12,
             depthWrite: false,
             side: THREE.DoubleSide
         });
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(scale * 0.8, scale), material);
         mesh.frustumCulled = false;
+        mesh.renderOrder = 2;
         const group = new THREE.Group();
+        group.frustumCulled = false;
         group.add(mesh);
         group.visible = false;
         this.group.add(group);
@@ -212,6 +238,8 @@ export class DinoLifeSystem {
             group,
             material,
             animation: new SpriteAnimationController(this, species, material),
+            lastValidBillboardYaw: null,
+            lastValidCameraYaw: null,
             state: random() > 0.72 ? 'idle' : 'walk',
             stateTimer: randomRange(random, 1.0, 6.0),
             turnTimer: randomRange(random, 0.8, 4.5),
@@ -243,7 +271,7 @@ export class DinoLifeSystem {
         dino.group.quaternion.setFromUnitVectors(this.surfaceUp, up);
 
         dino.mesh.position.set(0, scale * 0.5, 0);
-        this.updateBillboard(dino);
+        this.updateDinoBillboard(dino);
     }
 
     getCenter() {
@@ -262,7 +290,8 @@ export class DinoLifeSystem {
     }
 
     getGroundOffset(scale, radius) {
-        return Math.max(0.02, Math.min(0.08, radius * 0.006, scale * 0.14));
+        const baseOffset = Math.max(0.02, Math.min(0.08, radius * 0.006, scale * 0.14));
+        return baseOffset + Math.min(0.025, scale * 0.03);
     }
 
     getWorldCenter() {
@@ -283,40 +312,81 @@ export class DinoLifeSystem {
         return this.tmpWorldNormal.normalize();
     }
 
-    updateBillboard(dino) {
+    updateDinoBillboard(dino, camera = this.camera) {
         dino.group.updateWorldMatrix(true, false);
-        this.tmpLocalCamera.copy(this.camera.position);
+        camera.getWorldPosition(this.tmpCameraWorld);
+        this.tmpLocalCamera.copy(this.tmpCameraWorld);
         dino.group.worldToLocal(this.tmpLocalCamera);
-        this.tmpLocalCamera.y = 0;
-        if (this.tmpLocalCamera.lengthSq() < 0.000001) return;
-        this.tmpLocalCamera.normalize();
-        dino.mesh.rotation.set(0, Math.atan2(this.tmpLocalCamera.x, this.tmpLocalCamera.z), 0);
+
+        const localCameraLengthSq = this.tmpLocalCamera.lengthSq();
+        const hasCameraVector = localCameraLengthSq > DINO_BILLBOARD_EPSILON;
+        const flatCameraLengthSq = this.tmpLocalCamera.x * this.tmpLocalCamera.x + this.tmpLocalCamera.z * this.tmpLocalCamera.z;
+        const flatCameraRatioSq = hasCameraVector ? flatCameraLengthSq / localCameraLengthSq : 0;
+        const hasFlatCameraVector = flatCameraRatioSq > DINO_BILLBOARD_EPSILON;
+
+        this.tmpInverseQuaternion.copy(dino.group.quaternion).invert();
+        this.tmpLocalTangent.copy(dino.tangent).applyQuaternion(this.tmpInverseQuaternion);
+        this.tmpLocalTangent.y = 0;
+
+        let tangentYaw = null;
+        if (this.tmpLocalTangent.lengthSq() > DINO_BILLBOARD_EPSILON) {
+            this.tmpLocalTangent.normalize();
+            tangentYaw = Math.atan2(this.tmpLocalTangent.x, this.tmpLocalTangent.z);
+        }
+
+        const baseYaw = Number.isFinite(tangentYaw) ? tangentYaw : Number.isFinite(dino.lastValidBillboardYaw) ? dino.lastValidBillboardYaw : 0;
+        let cameraYaw = dino.lastValidBillboardYaw;
+        if (hasFlatCameraVector) {
+            cameraYaw = Math.atan2(this.tmpLocalCamera.x, this.tmpLocalCamera.z);
+            dino.lastValidCameraYaw = cameraYaw;
+        } else if (!Number.isFinite(cameraYaw)) {
+            cameraYaw = Number.isFinite(dino.lastValidCameraYaw) ? dino.lastValidCameraYaw : baseYaw;
+        }
+
+        const pseudo3d = this.settings.dinoPseudo3dEnabled !== false;
+        const followFactor = pseudo3d ? clampValue(Number(this.settings.dinoBillboardFollow ?? DINO_BILLBOARD_FOLLOW_FACTOR), 0, 1) : 1;
+        const maxSideAngle = pseudo3d
+            ? clampValue(Number(this.settings.dinoMaxSideAngle ?? 65), 25, 85) * Math.PI / 180
+            : Math.PI * 0.5;
+        const yawDiff = normalizeAngle(cameraYaw - baseYaw);
+        let finalYaw = pseudo3d ? baseYaw + yawDiff * followFactor : cameraYaw;
+        const finalDiffFromCamera = clampValue(normalizeAngle(finalYaw - cameraYaw), -maxSideAngle, maxSideAngle);
+        finalYaw = cameraYaw + finalDiffFromCamera;
+
+        dino.mesh.rotation.set(0, finalYaw, 0);
+        dino.mesh.scale.set(1, 1, 1);
+        dino.lastValidBillboardYaw = finalYaw;
+    }
+
+    updateBillboard(dino) {
+        this.updateDinoBillboard(dino);
     }
 
     update(deltaTime) {
         if (!this.shouldRunForPlanet()) {
             this.group.visible = false;
+            this.activeCount = 0;
             return;
         }
         this.group.visible = true;
         const center = this.getWorldCenter();
         const radius = this.getRadius();
         const cameraDistanceFromCenter = this.camera.position.distanceTo(center);
-        const renderDistance = this.settings.dinoRenderDistance || radius * 5.5;
+        const distanceCulling = this.settings.dinoDistanceCulling !== false;
+        const renderDistance = distanceCulling ? (this.settings.dinoRenderDistance || radius * 5.5) : Number.POSITIVE_INFINITY;
         const animateDistance = this.settings.dinoAnimateDistance || radius * 3.5;
         const globalCullDistance = Math.max(radius * 2.6, renderDistance);
         if (cameraDistanceFromCenter > globalCullDistance + radius) {
             this.population.forEach((dino) => dino.group.visible = false);
+            this.activeCount = 0;
             return;
         }
 
-        this.tmpCameraDir.copy(this.camera.position).sub(center).normalize();
         let active = 0;
         for (const dino of this.population) {
-            const visibleSide = this.getWorldNormal(dino).dot(this.tmpCameraDir) > -0.08;
             dino.group.getWorldPosition(this.tmpWorldPosition);
             const distance = this.tmpWorldPosition.distanceTo(this.camera.position);
-            const visible = visibleSide && distance < renderDistance && active < this.maxActive;
+            const visible = distance < renderDistance && active < this.maxActive;
             dino.group.visible = visible;
             if (!visible) continue;
             active++;
@@ -325,8 +395,11 @@ export class DinoLifeSystem {
             this.updateBehavior(dino, deltaTime, animate);
             this.moveDino(dino, deltaTime);
             this.placeDino(dino);
-            if (animate) dino.animation.update(deltaTime, this.getSpriteDirection(dino));
+            if (animate && this.settings.dinoAnimationEnabled !== false) {
+                dino.animation.update(deltaTime, this.getSpriteDirection(dino));
+            }
         }
+        this.activeCount = active;
     }
 
     updateBehavior(dino, deltaTime, animate) {
@@ -359,6 +432,7 @@ export class DinoLifeSystem {
     }
 
     getSpriteDirection(dino) {
+        if (this.settings.dinoPseudo3dEnabled === false) return 'S';
         dino.group.getWorldPosition(this.tmpWorldPosition);
         const normal = this.getWorldNormal(dino).clone();
         const toCamera = this.camera.position.clone().sub(this.tmpWorldPosition).normalize();
@@ -398,7 +472,7 @@ export class DinoLifeSystem {
             url,
             (loaded) => {
                 loaded.minFilter = this.THREE.LinearFilter;
-                loaded.magFilter = this.THREE.NearestFilter;
+                loaded.magFilter = this.settings.dinoSpriteQuality === 'low' ? this.THREE.NearestFilter : this.THREE.LinearFilter;
                 loaded.generateMipmaps = false;
                 loaded.needsUpdate = true;
             },
@@ -411,7 +485,7 @@ export class DinoLifeSystem {
             }
         );
         texture.minFilter = this.THREE.LinearFilter;
-        texture.magFilter = this.THREE.NearestFilter;
+        texture.magFilter = this.settings.dinoSpriteQuality === 'low' ? this.THREE.NearestFilter : this.THREE.LinearFilter;
         this.textureCache.set(url, texture);
         return texture;
     }

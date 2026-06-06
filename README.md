@@ -64,5 +64,5 @@ Se quiser expandir o projeto, os pontos naturais para evolução são:
 
 - novos presets de planetas;
 - mais espécies de vida;
-- efeitos de clima e chuva;
+- efeitos atmosfericos;
 - exportação de screenshots ou cenas.

@@ -38,17 +38,19 @@ function disposeNode(node) {
 }
 
 export class UniverseExpansion {
-    constructor({ THREE, parentGroup, camera, planetRadius = 10 }) {
+    constructor({ THREE, parentGroup, camera, planetRadius = 10, fluidEffects = null }) {
         this.THREE = THREE;
         this.parentGroup = parentGroup;
         this.camera = camera;
         this.planetRadius = planetRadius;
+        this.fluidEffects = fluidEffects;
         this.group = new THREE.Group();
         this.group.name = 'UniverseExpansion';
         this.animatables = [];
         this.comets = [];
         this.nebulas = [];
         this.blackHoles = [];
+        this.lastStats = { particles: 0, decorativeObjects: 0 };
         this.tempVector = new THREE.Vector3();
         this.tempVector2 = new THREE.Vector3();
         this.tempVector3 = new THREE.Vector3();
@@ -68,6 +70,7 @@ export class UniverseExpansion {
         if (settings.cosmicBlackHolesEnabled) this.createBlackHoles(random, seed);
         if (settings.cosmicCometsEnabled) this.createComets(random, settings.cosmicCometCount || 0);
         if (settings.cosmicStationsEnabled) this.createStations(random, settings.cosmicStationCount || 0);
+        this.updateStats();
     }
 
     update(deltaTime, elapsedTime) {
@@ -78,6 +81,11 @@ export class UniverseExpansion {
             nebula.sprite.material.rotation += nebula.rotationSpeed * timeScale;
             nebula.sprite.material.opacity = nebula.baseOpacity + Math.sin((elapsedTime || 0) * nebula.pulseSpeed + nebula.phase) * nebula.pulseAmount;
         });
+    }
+
+    updateSettings(settings = {}) {
+        this.settings = { ...this.settings, ...settings };
+        this.fluidEffects?.configure?.(this.settings);
     }
 
     dispose() {
@@ -91,6 +99,21 @@ export class UniverseExpansion {
             disposeNode(child);
         }
         if (this.group.parent) this.group.parent.remove(this.group);
+        this.lastStats = { particles: 0, decorativeObjects: 0 };
+    }
+
+    updateStats() {
+        let decorativeObjects = 0;
+        this.group.traverse((object) => {
+            if (object.isMesh || object.isSprite || object.isPoints || object.isInstancedMesh) decorativeObjects++;
+        });
+        const particles = this.comets.reduce((total, comet) => total + (comet.particleCount || 0), 0);
+        this.lastStats = { particles, decorativeObjects };
+        return this.lastStats;
+    }
+
+    getStats() {
+        return this.updateStats();
     }
 
     collectLensData(maxCount = 2) {
@@ -247,48 +270,95 @@ export class UniverseExpansion {
         return texture;
     }
 
-    createBlackHoles(random, seed) {
+    createAdvancedBlackHole(seed, random, scale) {
         const { THREE } = this;
+        const group = new THREE.Group();
+        const diskColor = new THREE.Color().setHSL(randomRange(random, 18, 34) / 360, 0.96, 0.58);
+        const disk = new THREE.Mesh(
+            new THREE.RingGeometry(scale * 0.2, scale * 0.86, 192, 10),
+            new THREE.MeshBasicMaterial({
+                map: this.createAccretionDiskTexture(seed),
+                transparent: true,
+                opacity: 0.88,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            })
+        );
+        disk.rotation.x = randomRange(random, 0.5, 0.65) * Math.PI;
+        disk.rotation.z = randomRange(random, -0.55, 0.55);
+
+        const core = new THREE.Mesh(
+            new THREE.SphereGeometry(scale * 0.18, 96, 64),
+            new THREE.MeshBasicMaterial({ color: 0x000000 })
+        );
+        const lens = new THREE.Mesh(
+            new THREE.SphereGeometry(scale * 0.48, 96, 64),
+            new THREE.MeshBasicMaterial({
+                color: 0xffb36b,
+                transparent: true,
+                opacity: 0.095,
+                side: THREE.BackSide,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            })
+        );
+        const photonRing = new THREE.Mesh(
+            new THREE.TorusGeometry(scale * 0.23, scale * 0.01, 16, 160),
+            new THREE.MeshBasicMaterial({ color: 0xffe0a3, transparent: true, opacity: 0.92, blending: THREE.AdditiveBlending, depthWrite: false })
+        );
+        photonRing.rotation.copy(disk.rotation);
+
+        const upperArc = new THREE.Mesh(
+            new THREE.TorusGeometry(scale * 0.43, scale * 0.008, 12, 160, Math.PI * 1.55),
+            new THREE.MeshBasicMaterial({ color: diskColor, transparent: true, opacity: 0.46, blending: THREE.AdditiveBlending, depthWrite: false })
+        );
+        upperArc.rotation.set(Math.PI * 0.68, 0, Math.PI * 0.18);
+
+        const shearRing = new THREE.Mesh(
+            new THREE.TorusGeometry(scale * 0.58, scale * 0.006, 10, 180),
+            new THREE.MeshBasicMaterial({ color: 0x7fb7ff, transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending, depthWrite: false })
+        );
+        shearRing.rotation.set(Math.PI * 0.58, 0.08, -0.2);
+
+        const jetMaterial = new THREE.MeshBasicMaterial({
+            color: 0x9fdcff,
+            transparent: true,
+            opacity: random() > 0.42 ? 0.2 : 0.0,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const jetA = new THREE.Mesh(new THREE.ConeGeometry(scale * 0.018, scale * 0.82, 32, 1, true), jetMaterial);
+        const jetB = jetA.clone();
+        jetA.position.y = scale * 0.52;
+        jetB.position.y = -scale * 0.52;
+        jetB.rotation.z = Math.PI;
+
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.createGlowTexture('rgba(255,190,95,0.46)', 'rgba(255,80,30,0)'),
+            transparent: true,
+            opacity: 0.42,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        }));
+        glow.scale.set(scale * 1.55, scale * 1.55, 1);
+
+        group.add(glow, disk, lens, upperArc, shearRing, photonRing, core, jetA, jetB);
+        group.userData.blackHole = true;
+        group.userData.disk = disk;
+        group.userData.photonRing = photonRing;
+        group.userData.lens = lens;
+
+        return { group, disk, lens, photonRing, upperArc, shearRing, glow, diskColor };
+    }
+
+    createBlackHoles(random, seed) {
         const radius = this.planetRadius;
         const count = Math.min(2, Math.max(0, Math.floor(this.settings.cosmicBlackHoleCount || 1)));
         for (let i = 0; i < count; i++) {
-            const group = new THREE.Group();
             const scale = randomRange(random, 2.7, 4.2) * radius;
-            const disk = new THREE.Mesh(
-                new THREE.RingGeometry(scale * 0.2, scale * 0.86, 192, 8),
-                new THREE.MeshBasicMaterial({
-                    map: this.createAccretionDiskTexture(seed + i * 101),
-                    transparent: true,
-                    opacity: 0.82,
-                    side: THREE.DoubleSide,
-                    blending: THREE.AdditiveBlending,
-                    depthWrite: false
-                })
-            );
-            disk.rotation.x = randomRange(random, 0.48, 0.66) * Math.PI;
-            disk.rotation.z = randomRange(random, -0.55, 0.55);
-
-            const core = new THREE.Mesh(
-                new THREE.SphereGeometry(scale * 0.18, 64, 40),
-                new THREE.MeshBasicMaterial({ color: 0x000000 })
-            );
-            const lens = new THREE.Mesh(
-                new THREE.SphereGeometry(scale * 0.47, 64, 40),
-                new THREE.MeshBasicMaterial({
-                    color: 0xffb36b,
-                    transparent: true,
-                    opacity: 0.09,
-                    side: THREE.BackSide,
-                    blending: THREE.AdditiveBlending,
-                    depthWrite: false
-                })
-            );
-            const halo = new THREE.Mesh(
-                new THREE.TorusGeometry(scale * 0.34, scale * 0.016, 12, 160),
-                new THREE.MeshBasicMaterial({ color: 0xffdfaa, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false })
-            );
-            halo.rotation.copy(disk.rotation);
-            group.add(lens, disk, halo, core);
+            const blackHole = this.createAdvancedBlackHole(seed + i * 101, random, scale);
+            const { group, disk, lens, photonRing, upperArc, shearRing, glow, diskColor } = blackHole;
             group.position.set(
                 randomRange(random, -9.5, 9.5) * radius,
                 randomRange(random, -3.6, 3.6) * radius,
@@ -298,14 +368,22 @@ export class UniverseExpansion {
             this.group.add(group);
             this.blackHoles.push({
                 group,
-                lensRadius: scale * 0.74,
+                lensRadius: scale * 0.82,
                 strength: randomRange(random, 0.15, 0.22)
+            });
+            this.fluidEffects?.attachBlackHoleFluid?.(group, {
+                scale: scale * 1.05,
+                color: diskColor,
+                opacity: 0.24
             });
             this.animatables.push({
                 update: (timeScale) => {
                     disk.rotation.z += 0.0045 * timeScale;
-                    halo.rotation.z -= 0.002 * timeScale;
+                    photonRing.rotation.z -= 0.0022 * timeScale;
+                    upperArc.rotation.z -= 0.0015 * timeScale;
+                    shearRing.rotation.z += 0.001 * timeScale;
                     lens.rotation.y += 0.0008 * timeScale;
+                    glow.material.rotation += 0.00045 * timeScale;
                 }
             });
         }
@@ -441,6 +519,11 @@ export class UniverseExpansion {
         const { THREE } = this;
         const cappedCount = Math.min(10, Math.max(0, Math.floor(count)));
         const tailIntensity = Math.max(0.35, Number(this.settings.cosmicCometTailIntensity || 1));
+        const qualityMap = { low: 0.62, medium: 1, high: 1.35, ultra: 1.75, cinematic: 2.15 };
+        const densityMap = { low: 0.62, medium: 1, high: 1.35, ultra: 1.75, cinematic: 2.15 };
+        const qualityMultiplier = qualityMap[this.settings.cosmicCometTailQuality] || 1;
+        const densityMultiplier = densityMap[this.settings.particleDensity] || 1;
+        const particleMultiplier = Math.max(0.25, Math.min(2.4, Number(this.settings.particleMultiplier || 1) * densityMultiplier));
         for (let i = 0; i < cappedCount; i++) {
             const group = new THREE.Group();
             const core = new THREE.Mesh(
@@ -455,7 +538,7 @@ export class UniverseExpansion {
                 depthWrite: false
             }));
             coreGlow.scale.setScalar(0.75 * this.planetRadius);
-            const particleCount = Math.min(120, Math.floor(34 + tailIntensity * 30));
+            const particleCount = Math.min(260, Math.max(16, Math.floor((34 + tailIntensity * 30) * qualityMultiplier * particleMultiplier)));
             const positions = new Float32Array(particleCount * 3);
             const velocities = new Float32Array(particleCount * 3);
             const alphas = new Float32Array(particleCount);
