@@ -1,8 +1,15 @@
+const DEBUG_CHAOS_EFFECTS = false;
+
+function debugChaosEffects(...args) {
+    if (DEBUG_CHAOS_EFFECTS) console.debug('[ChaosEffects]', ...args);
+}
+
 function disposeObject(object) {
     if (!object) return;
     object.parent?.remove(object);
     const geometries = new Set();
     const materials = new Set();
+    const textures = new Set();
     object.traverse((child) => {
         if (child.geometry) geometries.add(child.geometry);
         if (!child.material) return;
@@ -11,7 +18,19 @@ function disposeObject(object) {
             if (material) materials.add(material);
         });
     });
+    materials.forEach((material) => {
+        Object.keys(material).forEach((key) => {
+            const value = material[key];
+            if (value?.isTexture) textures.add(value);
+        });
+        if (material.uniforms) {
+            Object.values(material.uniforms).forEach((uniform) => {
+                if (uniform?.value?.isTexture) textures.add(uniform.value);
+            });
+        }
+    });
     geometries.forEach((geometry) => geometry.dispose?.());
+    textures.forEach((texture) => texture.dispose?.());
     materials.forEach((material) => material.dispose?.());
 }
 
@@ -28,6 +47,7 @@ export class PlanetImpactEffects {
         this.scene.add(this.group);
         this.effects = [];
         this.particlePool = [];
+        this.disposed = false;
         this.performance = {
             maxEffects: 72,
             maxParticlesPerBurst: 70,
@@ -56,13 +76,20 @@ export class PlanetImpactEffects {
         }
     }
 
+    ensureGroupAttached() {
+        if (this.disposed) return;
+        if (!this.group.parent && this.scene) this.scene.add(this.group);
+        this.group.visible = true;
+    }
+
     update(deltaTime, timeScale = 1) {
+        this.ensureGroupAttached();
         const dt = Math.min(0.05, deltaTime || 0.016) * timeScale;
         for (let i = this.effects.length - 1; i >= 0; i--) {
             const effect = this.effects[i];
             effect.age += dt;
             const t = effect.age / effect.life;
-            if (effect.update) effect.update(dt, t);
+            if (effect.update) effect.update(dt, t, effect.age);
             if (effect.age >= effect.life) {
                 if (effect.recycle) effect.recycle(effect.object);
                 else {
@@ -75,7 +102,9 @@ export class PlanetImpactEffects {
     }
 
     addTimed(object, life, update, recycle = null) {
+        this.ensureGroupAttached();
         this.group.add(object);
+        this.group.visible = true;
         object.visible = true;
         this.effects.push({ object, life, age: 0, update, recycle });
         this.trimToLimit();
@@ -120,57 +149,181 @@ export class PlanetImpactEffects {
 
     createMeteor({ start, end, size = 0.6, speed = 1, type = 'rocky', onImpact }) {
         const THREE = this.THREE;
-        const bodyColor = type === 'icy' ? 0xbfefff : type === 'metallic' ? 0xd8d6cf : 0x8a5a3c;
+        const meteorSize = Math.max(0.42, size);
+        const bodyColor = type === 'icy' ? 0x9dc8d4 : type === 'metallic' ? 0xa9a7a0 : 0x4c342a;
+        const craterColor = type === 'icy' ? 0x567f8a : type === 'metallic' ? 0x4b4b4f : 0x1d1512;
         const fireColor = type === 'icy' ? 0x76dfff : type === 'explosive' ? 0xffd166 : 0xff7333;
+        const hotColor = type === 'icy' ? 0xc8f7ff : type === 'explosive' ? 0xfff0a8 : 0xff9c43;
         const group = new THREE.Group();
         const velocity = end.clone().sub(start);
         const direction = velocity.clone().normalize();
-        const body = new THREE.Mesh(
-            new THREE.DodecahedronGeometry(size, 1),
-            new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.74, metalness: type === 'metallic' ? 0.45 : 0.08, emissive: fireColor, emissiveIntensity: 0.18 })
-        );
-        body.position.y = size * 0.38;
+
+        const rockGeometry = new THREE.IcosahedronGeometry(meteorSize, 3);
+        const pos = rockGeometry.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            const v = new THREE.Vector3().fromBufferAttribute(pos, i);
+            const n = v.clone().normalize();
+            const noise =
+                0.78 +
+                Math.random() * 0.38 +
+                0.12 * Math.sin(v.x * 5.1) +
+                0.10 * Math.sin(v.y * 7.3) +
+                0.08 * Math.sin(v.z * 6.4);
+            v.copy(n.multiplyScalar(meteorSize * noise));
+            pos.setXYZ(i, v.x, v.y, v.z);
+        }
+        rockGeometry.computeVertexNormals();
+
+        const bodyMaterial = new THREE.MeshStandardMaterial({
+            color: bodyColor,
+            roughness: 0.86,
+            metalness: type === 'metallic' ? 0.42 : 0.04,
+            emissive: fireColor,
+            emissiveIntensity: type === 'icy' ? 0.08 : 0.22
+        });
+        const craterMaterial = new THREE.MeshStandardMaterial({
+            color: craterColor,
+            roughness: 0.95,
+            metalness: 0.02,
+            emissive: type === 'icy' ? 0x10242a : 0x220806,
+            emissiveIntensity: 0.18
+        });
+        const emberMaterial = new THREE.MeshBasicMaterial({
+            color: hotColor,
+            transparent: true,
+            opacity: 0.62,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const body = new THREE.Mesh(rockGeometry, bodyMaterial);
+        body.position.y = meteorSize * 0.3;
+        body.userData.spinAxis = randomUnit(THREE);
+        body.userData.spinSpeed = 2.5 + Math.random() * 4.0;
+
+        const spotGeometry = new THREE.SphereGeometry(meteorSize * 0.115, 8, 6);
+        for (let i = 0; i < 10; i++) {
+            const normal = randomUnit(THREE);
+            const crater = new THREE.Mesh(spotGeometry, i % 3 === 0 ? emberMaterial : craterMaterial);
+            crater.position.copy(normal).multiplyScalar(meteorSize * (0.92 + Math.random() * 0.2));
+            crater.scale.set(1.15 + Math.random() * 0.8, 0.22, 0.7 + Math.random() * 0.55);
+            crater.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+            body.add(crater);
+        }
+
         const glow = new THREE.Mesh(
-            new THREE.SphereGeometry(size * 1.75, 18, 12),
-            new THREE.MeshBasicMaterial({ color: fireColor, transparent: true, opacity: 0.24, blending: THREE.AdditiveBlending, depthWrite: false })
+            new THREE.SphereGeometry(meteorSize * 1.9, 24, 16),
+            new THREE.MeshBasicMaterial({ color: fireColor, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false })
         );
-        glow.position.y = -size * 0.22;
-        const trail = this.createTrail(size, fireColor);
-        group.add(trail, glow, body);
+        glow.position.y = -meteorSize * 0.15;
+        const frontAura = new THREE.Mesh(
+            new THREE.SphereGeometry(meteorSize * 1.28, 24, 14),
+            new THREE.MeshBasicMaterial({ color: hotColor, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false })
+        );
+        frontAura.position.y = meteorSize * 0.82;
+        const trail = this.createTrail(meteorSize, fireColor);
+        group.add(trail, glow, frontAura, body);
         group.position.copy(start);
         group.userData.start = start.clone();
         group.userData.end = end.clone();
         const distance = start.distanceTo(end);
-        const life = Math.max(1.15, Math.min(3.8, distance / (14 * Math.max(0.25, speed))));
+        const life = Math.max(1.35, Math.min(4.2, distance / (12 * Math.max(0.25, speed))));
         let impacted = false;
-        return this.addTimed(group, life, (dt, t) => {
+        const meteor = this.addTimed(group, life, (dt, t) => {
             const eased = Math.min(1, t * t * (3 - 2 * t));
+            const pulse = 0.5 + 0.5 * Math.sin(t * Math.PI * 12);
             group.position.lerpVectors(start, end, eased);
             group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
-            body.rotation.x += dt * 3.2;
-            body.rotation.y += dt * 2.4;
-            glow.scale.setScalar(1 + Math.sin(t * Math.PI * 8) * 0.12);
+            body.rotateOnAxis(body.userData.spinAxis, body.userData.spinSpeed * dt);
+            glow.scale.setScalar(1 + pulse * 0.16 + t * 0.18);
+            glow.material.opacity = 0.18 + pulse * 0.12;
+            frontAura.scale.setScalar(1 + pulse * 0.1 + t * 0.2);
+            frontAura.material.opacity = 0.16 + pulse * 0.12;
+            this.updateTrail(trail, dt, t, pulse);
             if (!impacted && t >= 0.98) {
                 impacted = true;
                 onImpact?.();
             }
         });
+        debugChaosEffects('meteor created', {
+            groupParent: Boolean(this.group.parent),
+            activeEffects: this.effects.length,
+            life: Number(life.toFixed(2))
+        });
+        return meteor;
     }
 
     createTrail(size, color) {
         const THREE = this.THREE;
-        const geometry = new THREE.ConeGeometry(size * 0.65, size * 5.8, 18, 1, true);
-        const material = new THREE.MeshBasicMaterial({
+        const group = new THREE.Group();
+        const outerMaterial = new THREE.MeshBasicMaterial({
             color,
             transparent: true,
-            opacity: 0.26,
+            opacity: 0.18,
             side: THREE.DoubleSide,
             blending: THREE.AdditiveBlending,
             depthWrite: false
         });
-        const trail = new THREE.Mesh(geometry, material);
-        trail.position.y = -size * 3.05;
-        return trail;
+        const innerMaterial = new THREE.MeshBasicMaterial({
+            color: 0xfff0a5,
+            transparent: true,
+            opacity: 0.34,
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const emberMaterial = new THREE.PointsMaterial({
+            color,
+            size: size * 0.18,
+            transparent: true,
+            opacity: 0.78,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        const outer = new THREE.Mesh(new THREE.ConeGeometry(size * 0.92, size * 6.4, 22, 1, true), outerMaterial);
+        outer.position.y = -size * 3.05;
+        const inner = new THREE.Mesh(new THREE.ConeGeometry(size * 0.42, size * 4.7, 18, 1, true), innerMaterial);
+        inner.position.y = -size * 2.45;
+
+        const sparkCount = 24;
+        const sparkGeometry = new THREE.BufferGeometry();
+        const sparkPositions = new Float32Array(sparkCount * 3);
+        for (let i = 0; i < sparkCount; i++) {
+            const idx = i * 3;
+            const drift = (Math.random() - 0.5) * size * 0.75;
+            sparkPositions[idx] = drift;
+            sparkPositions[idx + 1] = -size * (1.0 + Math.random() * 4.7);
+            sparkPositions[idx + 2] = (Math.random() - 0.5) * size * 0.75;
+        }
+        sparkGeometry.setAttribute('position', new THREE.BufferAttribute(sparkPositions, 3));
+        const sparks = new THREE.Points(sparkGeometry, emberMaterial);
+        group.add(outer, inner, sparks);
+        group.userData.outer = outer;
+        group.userData.inner = inner;
+        group.userData.sparks = sparks;
+        group.userData.sparkBaseSize = emberMaterial.size;
+        return group;
+    }
+
+    updateTrail(trail, dt, t, pulse) {
+        const outer = trail.userData.outer;
+        const inner = trail.userData.inner;
+        const sparks = trail.userData.sparks;
+        const fade = Math.max(0, 1 - t * 0.32);
+        if (outer) {
+            outer.scale.set(1 + pulse * 0.16, 1 + pulse * 0.28, 1 + pulse * 0.16);
+            outer.rotation.y += dt * 1.8;
+            outer.material.opacity = 0.14 * fade + pulse * 0.09;
+        }
+        if (inner) {
+            inner.scale.set(1 + pulse * 0.22, 1 + pulse * 0.36, 1 + pulse * 0.22);
+            inner.rotation.y -= dt * 2.7;
+            inner.material.opacity = 0.26 * fade + pulse * 0.16;
+        }
+        if (sparks) {
+            sparks.rotation.y += dt * 2.2;
+            sparks.material.opacity = 0.55 * fade + pulse * 0.24;
+            sparks.material.size = trail.userData.sparkBaseSize * (0.8 + pulse * 0.65);
+        }
     }
 
     createExplosion(position, normal, options = {}) {
@@ -210,15 +363,68 @@ export class PlanetImpactEffects {
         const THREE = this.THREE;
         const direction = end.clone().sub(start);
         const length = direction.length();
+        if (length <= 0.001) return null;
+        const beamDirection = direction.normalize();
+        const baseThickness = Math.max(0.075, thickness);
+        const group = new THREE.Group();
+        const beamMaterial = new THREE.MeshBasicMaterial({
+            color: 0xfff3cc,
+            transparent: true,
+            opacity: 0.82,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            depthTest: false
+        });
+        const glowMaterial = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.3,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            depthTest: false
+        });
         const beam = new THREE.Mesh(
-            new THREE.CylinderGeometry(thickness, thickness * 0.5, Math.max(0.1, length), 14, 1, true),
-            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.62, blending: THREE.AdditiveBlending, depthWrite: false })
+            new THREE.CylinderGeometry(baseThickness * 0.42, baseThickness * 0.28, Math.max(0.1, length), 16, 1, true),
+            beamMaterial
+        );
+        const glow = new THREE.Mesh(
+            new THREE.CylinderGeometry(baseThickness * 1.65, baseThickness * 1.15, Math.max(0.1, length), 18, 1, true),
+            glowMaterial
+        );
+        const impact = new THREE.Mesh(
+            new THREE.SphereGeometry(baseThickness * 2.1, 18, 10),
+            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false })
+        );
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(baseThickness * 1.25, baseThickness * 2.8, 28),
+            new THREE.MeshBasicMaterial({ color: 0xfff3cc, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false, depthTest: false })
         );
         beam.position.copy(start).lerp(end, 0.5);
-        beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
-        return this.addTimed(beam, 0.08, (dt, t) => {
-            beam.material.opacity = 0.62 * (1 - t);
+        glow.position.copy(beam.position);
+        impact.position.copy(end);
+        ring.position.copy(end);
+        beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), beamDirection);
+        glow.quaternion.copy(beam.quaternion);
+        ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), beamDirection);
+        group.add(glow, beam, impact, ring);
+        group.traverse((object) => {
+            object.renderOrder = 12;
         });
+        const laser = this.addTimed(group, 0.18, (dt, t) => {
+            const fade = Math.max(0, 1 - t);
+            beam.material.opacity = 0.82 * fade;
+            glow.material.opacity = 0.3 * fade;
+            impact.material.opacity = 0.72 * fade;
+            impact.scale.setScalar(1 + t * 2.2);
+            ring.material.opacity = 0.55 * fade;
+            ring.scale.setScalar(1 + t * 3.4);
+        });
+        debugChaosEffects('laser created', {
+            groupParent: Boolean(this.group.parent),
+            activeEffects: this.effects.length,
+            length: Number(length.toFixed(2))
+        });
+        return laser;
     }
 
     createParticles(position, normal, options = {}) {
@@ -277,12 +483,25 @@ export class PlanetImpactEffects {
         this.createExplosion(point, point.clone().normalize(), { radius: options.radius || 2.2, color: options.color || 0xff7040 });
     }
 
-    dispose() {
+    clear() {
         while (this.effects.length) {
             const effect = this.effects.pop();
             effect.object.parent?.remove(effect.object);
             disposeObject(effect.object);
         }
+        while (this.group.children.length) {
+            disposeObject(this.group.children[0]);
+        }
+        this.ensureGroupAttached();
+        debugChaosEffects('effects cleared', {
+            groupParent: Boolean(this.group.parent),
+            activeEffects: this.effects.length
+        });
+    }
+
+    dispose() {
+        this.clear();
+        this.disposed = true;
         while (this.particlePool.length) disposeObject(this.particlePool.pop());
         if (this.group.parent) this.group.parent.remove(this.group);
     }

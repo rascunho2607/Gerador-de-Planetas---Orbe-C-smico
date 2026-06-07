@@ -11,6 +11,12 @@ function randomTangent(THREE, normal) {
     return new THREE.Vector3().crossVectors(helper, normal).normalize().applyAxisAngle(normal, Math.random() * Math.PI * 2);
 }
 
+const DEBUG_CHAOS_EFFECTS = false;
+
+function debugChaosSystem(...args) {
+    if (DEBUG_CHAOS_EFFECTS) console.debug('[ChaosSystem]', ...args);
+}
+
 const CHAOS_PRESETS = {
     low: {
         maxEffects: 38,
@@ -121,6 +127,11 @@ export class PlanetChaosSystem {
 
         this.toolbar?.addEventListener('tool-change', (event) => {
             this.activeTool = event.detail.tool;
+            debugChaosSystem('tool selected', {
+                tool: this.activeTool,
+                effectsGroupParent: Boolean(this.effects?.group?.parent),
+                activeEffects: this.effects?.getActiveCount?.() || 0
+            });
         });
         this.toolbar?.addEventListener('tools-enabled-change', () => this.disableToolInteraction());
         this.toolbar?.addEventListener('collapse-change', () => {
@@ -163,7 +174,7 @@ export class PlanetChaosSystem {
     clearSceneArtifacts() {
         this.damage.setPlanet(null, null);
         this.fracture.clear();
-        this.effects.dispose();
+        this.effects.clear();
         this.lastHit = null;
         this.reticle.visible = false;
     }
@@ -381,8 +392,28 @@ export class PlanetChaosSystem {
         const end = hit.point.clone().add(tangent);
         const catastrophic = Boolean(state.catastrophic) || state.meteorType === 'explosive' && state.power > 0.82;
         const impactScale = catastrophic ? 2.15 : 1;
-        const start = end.clone().addScaledVector(hit.normalWorld, this.radius * (3.7 + state.power * 2.2)).addScaledVector(randomTangent(this.THREE, hit.normalWorld), radius * 1.15);
+        const cameraDir = new this.THREE.Vector3().subVectors(this.camera.position, end).normalize();
+        let side = new this.THREE.Vector3().crossVectors(cameraDir, hit.normalWorld);
+        if (side.lengthSq() < 0.001) side = randomTangent(this.THREE, hit.normalWorld);
+        else side.normalize();
+        const cameraDistance = this.camera.position.distanceTo(end);
+        const desiredDistance = radius * (2.2 + state.power * 1.4);
+        const startDistance = Math.max(
+            Math.min(this.radius * 1.15, cameraDistance * 0.52),
+            Math.min(desiredDistance, cameraDistance * 0.82)
+        );
+        const sideOffset = side.multiplyScalar(radius * offsetScale * (0.65 + Math.random() * 0.75) * (Math.random() < 0.5 ? -1 : 1));
+        const upOffset = hit.normalWorld.clone().multiplyScalar(radius * (0.5 + Math.random() * 0.55));
+        const start = end.clone()
+            .add(cameraDir.multiplyScalar(startDistance))
+            .add(sideOffset)
+            .add(upOffset);
         const meteorSize = this.radius * (0.05 + state.power * 0.085) * (catastrophic ? 1.35 : 1);
+        debugChaosSystem('meteor launch', {
+            effectsGroupParent: Boolean(this.effects?.group?.parent),
+            activeEffects: this.effects?.getActiveCount?.() || 0,
+            startDistance: Number(start.distanceTo(end).toFixed(2))
+        });
         this.effects.createMeteor({
             start,
             end,
@@ -430,6 +461,11 @@ export class PlanetChaosSystem {
         const end = hit.point.clone().addScaledVector(hit.normalWorld, 0.08);
         const rayDirection = hit.point.clone().sub(this.camera.position).normalize();
         const laserMode = state.laserMode || 'pierce';
+        debugChaosSystem('laser fire', {
+            mode: laserMode,
+            effectsGroupParent: Boolean(this.effects?.group?.parent),
+            activeEffects: this.effects?.getActiveCount?.() || 0
+        });
         this.effects.createLaserBeam(start, end, 0xff4569, this.radius * (0.006 + state.radius * 0.015));
         if (Math.random() > 0.58 || laserMode === 'annihilate') {
             this.fluidEffects?.triggerFluidBurst?.(end, {
