@@ -1,7 +1,11 @@
 export const ControlMode = {
     ORBIT: 'orbit',
     PLANET_FPS: 'planet_fps',
-    DINO_THIRD_PERSON: 'dino_third_person'
+    DINO_THIRD_PERSON: 'dino_third_person',
+    JEEP_THIRD_PERSON: 'jeep_third_person',
+    JEEP_FIRST_PERSON: 'jeep_first_person',
+    SHIP_THIRD_PERSON: 'ship_third_person',
+    SHIP_FIRST_PERSON: 'ship_first_person'
 };
 
 const TRIPLE_CLICK_WINDOW_MS = 650;
@@ -9,6 +13,7 @@ const TRIPLE_CLICK_MAX_SCREEN_DISTANCE = 24;
 const DINO_SCREEN_FALLBACK_DISTANCE = 46;
 const CLICK_DRAG_CANCEL_DISTANCE = 8;
 const CLICK_MAX_DURATION_MS = 420;
+const DOUBLE_ESC_EXIT_MS = 900;
 const MAX_PITCH = Math.PI * 0.44;
 const DINO_MAX_PITCH_DOWN = Math.PI * 0.76;
 const FPS_FOV_MIN = 35;
@@ -52,6 +57,9 @@ function isUiTarget(target) {
         '.planet-chaos-shell',
         '.planet-chaos-handle',
         '.planet-exploration-hud',
+        '.reinforcement-panel',
+        '.vehicle-hud',
+        '.vehicle-prompt',
         'button',
         'input',
         'textarea',
@@ -89,12 +97,16 @@ export class PlanetExplorationControls {
         this.getChaosToolbar = options.getChaosToolbar || (() => null);
         this.getSettings = options.getSettings || (() => ({}));
         this.isRegenerating = options.isRegenerating || (() => false);
+        this.isExternalInputActive = options.isExternalInputActive || (() => false);
+        this.shouldDeferEscape = options.shouldDeferEscape || (() => false);
         this.onModeChange = options.onModeChange || (() => {});
+        this.onToggleUi = options.onToggleUi || (() => {});
 
         this.mode = ControlMode.ORBIT;
         this.previousCameraState = null;
         this.isExitingMode = false;
         this.ignoreNextPointerUnlock = false;
+        this.lastEscapePressTime = 0;
 
         this.raycaster = new this.THREE.Raycaster();
         this.pointer = new this.THREE.Vector2();
@@ -246,7 +258,7 @@ export class PlanetExplorationControls {
         hud.innerHTML = `
             <div class="planet-exploration-status">
                 <strong data-exploration-title>Modo primeira pessoa</strong>
-                <span data-exploration-hint>WASD mover, Shift correr, Espaco pular, ESC sair</span>
+                <span data-exploration-hint>WASD mover, Shift correr, Espaco pular, ESC alterna UI</span>
             </div>
             <button class="planet-exploration-exit" type="button" title="Sair da exploracao" aria-label="Sair da exploracao">
                 <i class="fas fa-sign-out-alt"></i><span>Sair</span>
@@ -304,6 +316,10 @@ export class PlanetExplorationControls {
             this.ignoreNextPointerUnlock = false;
             return;
         }
+        if (this.mode === ControlMode.PLANET_FPS) {
+            this.updateHudForMode();
+            return;
+        }
         if (!this.isExitingMode) this.exitExplorationMode({ skipPointerUnlock: true });
     }
 
@@ -314,6 +330,7 @@ export class PlanetExplorationControls {
     }
 
     handleWheel(event) {
+        if (this.isExternalInputActive()) return;
         if (!this.isExplorationModeActive() || isUiTarget(event.target) || isEditableTarget(event.target)) return;
         event.preventDefault();
 
@@ -335,12 +352,22 @@ export class PlanetExplorationControls {
     }
 
     handleKeyDown(event) {
+        if (this.isExternalInputActive()) return;
         const key = normalizeInputKey(event);
+        if (key === 'escape' && this.shouldDeferEscape()) return;
         if (key === 'escape' && this.isExplorationModeActive()) {
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation?.();
-            this.exitExplorationMode();
+            const now = performance.now();
+            const shouldExit = now - this.lastEscapePressTime <= DOUBLE_ESC_EXIT_MS;
+            this.lastEscapePressTime = now;
+            if (shouldExit) {
+                this.exitExplorationMode();
+                return;
+            }
+            this.exitPointerLock();
+            this.updateHudForMode();
             return;
         }
 
@@ -614,7 +641,7 @@ export class PlanetExplorationControls {
         this.mode = ControlMode.PLANET_FPS;
         this.enterSharedMode(
             'Modo primeira pessoa',
-            'WASD mover, Shift correr, Espaco pular, ESC sair'
+            'WASD mover, Shift correr, Espaco pular, ESC alterna UI'
         );
         this.updatePlanetFpsCamera(0, true);
     }
@@ -705,6 +732,7 @@ export class PlanetExplorationControls {
     cleanupInputState() {
         this.pendingPointer = null;
         this.keys.clear();
+        this.lastEscapePressTime = 0;
         this.resetClickSequence();
         this.resetSurfaceState(this.fpsState);
         this.resetSurfaceState(this.dinoState);
@@ -1079,7 +1107,7 @@ export class PlanetExplorationControls {
 
     updateHudForMode() {
         if (this.mode === ControlMode.PLANET_FPS) {
-            this.updateHud('Modo primeira pessoa', 'WASD mover, Shift correr, Espaco pular, scroll altera FOV, ESC sair');
+            this.updateHud('Modo primeira pessoa', 'WASD mover, Shift correr, Espaco pular, scroll altera FOV, ESC alterna UI');
         } else if (this.mode === ControlMode.DINO_THIRD_PERSON) {
             this.updateHud('Controlando dino', 'WASD mover, Shift correr, mouse olhar, scroll ajusta distancia, ESC sair');
         }
@@ -1097,6 +1125,18 @@ export class PlanetExplorationControls {
 
     getMode() {
         return this.mode;
+    }
+
+    setExternalInputBlocker(callback) {
+        this.isExternalInputActive = typeof callback === 'function' ? callback : (() => false);
+    }
+
+    setExternalEscapeDeferrer(callback) {
+        this.shouldDeferEscape = typeof callback === 'function' ? callback : (() => false);
+    }
+
+    markEscapePress(time = performance.now()) {
+        this.lastEscapePressTime = time;
     }
 
     dispose() {

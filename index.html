@@ -273,6 +273,53 @@
             box-shadow: 0 0 24px rgba(90, 145, 255, 0.38);
         }
 
+        .performance-overlay {
+            position: absolute;
+            top: 82px;
+            left: 18px;
+            z-index: 31;
+            display: none;
+            min-width: 360px;
+            padding: 8px 10px;
+            border: 1px solid rgba(126, 178, 255, 0.28);
+            border-radius: 8px;
+            background: rgba(2, 6, 16, 0.62);
+            color: rgba(239, 247, 255, 0.92);
+            font: 700 11px/1.45 Consolas, 'Courier New', monospace;
+            letter-spacing: 0;
+            pointer-events: none;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(8px);
+        }
+
+        body.ui-hidden .performance-overlay,
+        body.wallpaper-mode .performance-overlay {
+            top: 16px;
+        }
+
+        .performance-overlay.is-visible {
+            display: block;
+        }
+
+        .performance-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .performance-row span {
+            display: inline-block;
+            white-space: pre;
+        }
+
+        .performance-row canvas {
+            width: 180px;
+            height: 28px;
+            border-left: 1px solid rgba(140, 190, 255, 0.18);
+            border-right: 1px solid rgba(140, 190, 255, 0.18);
+        }
+
         body.wallpaper-mode .editor-panel,
         body.wallpaper-mode .ui,
         body.wallpaper-mode .info-panel,
@@ -501,6 +548,13 @@
         <button id="resetViewBtn"><i class="fas fa-sync-alt"></i> REINICIAR CÂMERA</button>
     </div>
     <div class="seed-value" id="seedDisplay">semente: --</div>
+    <div class="performance-overlay" id="performanceOverlay" aria-hidden="true">
+        <div class="performance-row">
+            <span data-perf-fps></span>
+            <canvas data-perf-frame-graph width="180" height="28"></canvas>
+            <span data-perf-frame-ms></span>
+        </div>
+    </div>
 
     <script type="module">
         import * as THREE from 'three';
@@ -527,7 +581,9 @@
         import { PlanetChaosSystem } from './js/planet-chaos-system.js';
         import { PlanetVegetationSystem } from './js/planet-vegetation-system.js';
         import { createCosmicFluidEffects } from './js/cosmic-fluid-effects.js';
-        import { PlanetExplorationControls } from './js/planet-exploration-controls.js';
+        import { ControlMode, PlanetExplorationControls } from './js/planet-exploration-controls.js';
+        import { VehicleSystem } from './js/vehicle-system.js';
+        import { ReinforcementSystem } from './js/reinforcement-system.js';
 
         const PLANET_RADIUS = 10;
 
@@ -899,6 +955,8 @@
             maxActiveObjects: 220,
             showFps: true,
             showStats: true,
+            showFpsCounter: false,
+            showFrameTimeLine: false,
             explorationEnabled: true,
             explorationMouseSensitivity: 1,
             explorationWalkSpeed: 1,
@@ -1000,6 +1058,23 @@
             fluidEffects: cosmicFluidEffects,
             performance: editorState
         });
+
+        function setUiHidden(hidden) {
+            document.body.classList.toggle('wallpaper-mode', hidden);
+            document.body.classList.toggle('ui-hidden', hidden);
+            chaosToolbar.setGlobalUiHidden(hidden);
+            const button = document.getElementById('toggleUiBtn');
+            button?.classList.toggle('active', hidden);
+            if (button) {
+                button.title = hidden ? 'Mostrar interface' : 'Ocultar interface';
+                button.innerHTML = hidden ? '<i class="fas fa-eye-slash"></i>' : '<i class="fas fa-eye"></i>';
+            }
+        }
+
+        function toggleUiHidden() {
+            setUiHidden(!document.body.classList.contains('ui-hidden'));
+        }
+
         const surfaceExploration = new PlanetExplorationControls({
             THREE,
             scene,
@@ -1014,8 +1089,47 @@
             getDinoSystem: () => dinoLife,
             getChaosToolbar: () => chaosToolbar,
             getSettings: () => editorState,
+            isRegenerating: () => isRegeneratingPlanet,
+            onToggleUi: toggleUiHidden,
+            onModeChange: (mode) => {
+                if (mode === ControlMode.PLANET_FPS) setUiHidden(true);
+            }
+        });
+        const vehicleSystem = new VehicleSystem({
+            THREE,
+            scene,
+            camera,
+            renderer,
+            controls,
+            surfaceGroup: planetSurfaceGroup,
+            cosmicGroup,
+            getPlanetMesh: () => currentPlanetMesh,
+            getPlanetRadius: () => PLANET_RADIUS,
+            getPlanetCenter: () => new THREE.Vector3(0, 0, 0),
+            getPlanetSurfaceHeight: (normal) => samplePlanetSurfaceHeight(normal),
+            getChaosToolbar: () => chaosToolbar,
+            getExplorationControls: () => surfaceExploration,
+            getSettings: () => editorState,
             isRegenerating: () => isRegeneratingPlanet
         });
+        const reinforcementSystem = new ReinforcementSystem({
+            THREE,
+            scene,
+            camera,
+            renderer,
+            surfaceGroup: planetSurfaceGroup,
+            getPlanetMesh: () => currentPlanetMesh,
+            getPlanetRadius: () => PLANET_RADIUS,
+            getPlanetCenter: () => new THREE.Vector3(0, 0, 0),
+            getPlanetSurfaceHeight: (normal) => samplePlanetSurfaceHeight(normal),
+            getChaosToolbar: () => chaosToolbar,
+            getExplorationControls: () => surfaceExploration,
+            getVehicleSystem: () => vehicleSystem,
+            getSettings: () => editorState,
+            isRegenerating: () => isRegeneratingPlanet
+        });
+        surfaceExploration.setExternalInputBlocker(() => reinforcementSystem.isSequenceInputActive());
+        surfaceExploration.setExternalEscapeDeferrer(() => reinforcementSystem.isAimingDrop());
 
         const planetPresets = {
             earth: { objectType: 'terrestrial', waterLevel: 0.36, mountainIntensity: 1, deformation: 0.9, stormIntensity: 0.7, cloudsEnabled: true, cloudOpacity: 0.28, atmosphereIntensity: 0.12, atmosphereColor: '#77baff', ringsEnabled: false, moonsEnabled: true, moonCount: 1, rotationSpeed: 0.002 },
@@ -1303,6 +1417,8 @@
 
         function clearCosmicGroup() {
             needsRenderListFlush = true;
+            reinforcementSystem?.clear?.();
+            vehicleSystem?.clear?.();
             cosmicFluidEffects.disposeVisuals?.();
             planetChaos?.clearSceneArtifacts?.();
             dinoLife.clearPopulation();
@@ -1315,9 +1431,10 @@
             while (planetSurfaceGroup.children.length) {
                 const child = planetSurfaceGroup.children[0];
                 planetSurfaceGroup.remove(child);
-                if (child !== dinoLife.group) disposeObject(child);
+                if (child !== dinoLife.group && child !== reinforcementSystem?.marker) disposeObject(child);
             }
             planetSurfaceGroup.add(dinoLife.group);
+            reinforcementSystem?.reattachMarker?.();
             planetSurfaceGroup.rotation.set(0, 0, 0);
             while (cosmicGroup.children.length) {
                 const child = cosmicGroup.children[0];
@@ -2379,7 +2496,7 @@
         const cosmicControlKeys = ['cosmicBlackHolesEnabled', 'cosmicCometsEnabled', 'cosmicNebulasEnabled', 'cosmicStationsEnabled', 'cosmicPlanetsEnabled', 'cosmicOrbitLinesEnabled', 'cosmicLensDistortionEnabled', 'cosmicCometCount', 'cosmicCometTailIntensity', 'cosmicCometTailQuality', 'particleDensity', 'particleMultiplier', 'cosmicPlanetCount', 'cosmicStationCount', 'cosmicBlackHoleCount', 'blackHoleLensQuality'];
         const fluidControlKeys = ['fluidEffectsEnabled', 'fluidQuality', 'fluidNebulasEnabled', 'fluidPlasmaEnabled', 'fluidExplosionsEnabled', 'fluidBlackHolesEnabled', 'fluidTrailsEnabled', 'fluidIntensity', 'fluidInternalResolution', 'fluidUpdateRate', 'fluidMaxSimultaneous'];
         const explorationControlKeys = ['explorationEnabled', 'explorationMouseSensitivity', 'explorationWalkSpeed', 'explorationRunSpeed', 'explorationDinoSpeed', 'explorationJumpStrength', 'explorationHeadBobEnabled', 'explorationHeadBobIntensity', 'explorationCameraDistance'];
-        const graphicsLiveKeys = ['graphicsPreset', 'internalResolution', 'pixelRatioMode', 'targetFps', 'autoPerformanceOptimization', 'powerSaveMode', 'pauseWhenHidden', 'chaosQuality', 'chaosMaxEffects', 'chaosMaxFragments', 'decorativeRenderDistance', 'distantUpdateReduction', 'maxActiveObjects', 'showFps', 'showStats', ...fluidControlKeys, ...vegetationControlKeys];
+        const graphicsLiveKeys = ['graphicsPreset', 'internalResolution', 'pixelRatioMode', 'targetFps', 'autoPerformanceOptimization', 'powerSaveMode', 'pauseWhenHidden', 'chaosQuality', 'chaosMaxEffects', 'chaosMaxFragments', 'decorativeRenderDistance', 'distantUpdateReduction', 'maxActiveObjects', 'showFps', 'showStats', 'showFpsCounter', 'showFrameTimeLine', ...fluidControlKeys, ...vegetationControlKeys];
         const lightingLiveKeys = ['starDensity', 'starBrightness', 'starSize', 'backgroundColor', 'ambientIntensity', 'lightIntensity', 'exposure', 'cinematicLightingEnabled', 'cinematicExposure', 'cinematicContrast', 'cinematicIntensity', 'cinematicBloom', 'cinematicBloomStrength', 'cinematicAtmosphereFresnel', 'cinematicFakeReflections', 'cinematicShadowQuality', 'cinematicAmbientOcclusion'];
         const regenerateSettingKeys = ['cloudsEnabled', 'cloudOpacity', 'atmosphereIntensity', 'atmosphereColor', 'ringsEnabled', 'ringWidth', 'ringOpacity', 'ringColor', 'ringDebrisEnabled', 'ringDebrisDensity', 'ringDebrisQuality', 'ringAnimationEnabled', 'nebulaEnabled', 'nebulaIntensity', 'galaxyEnabled', 'distantPlanets', 'asteroidCount', 'comets', 'blackHoles', ...cosmicControlKeys];
         const persistentSettingKeys = [...new Set([...graphicsLiveKeys, ...lightingLiveKeys, ...dinoControlKeys, ...explorationControlKeys, ...regenerateSettingKeys])];
@@ -2455,6 +2572,76 @@
                 decorativeObjects: universeStats.decorativeObjects + slowSpinners.length + orbitingObjects.length + chaosStats.fragments + fluidStats.activeFluidEffects + vegetationStats.chunks,
                 internalResolution: getEffectiveInternalResolution()
             };
+        }
+
+        function updatePerformanceOverlay(deltaTime) {
+            const overlay = document.getElementById('performanceOverlay');
+            if (!overlay) return;
+            const showFpsCounter = Boolean(editorState.showFpsCounter);
+            const showFrameTimeLine = Boolean(editorState.showFrameTimeLine);
+            overlay.classList.toggle('is-visible', showFpsCounter || showFrameTimeLine);
+            if (!showFpsCounter && !showFrameTimeLine) return;
+
+            const fpsText = overlay.querySelector('[data-perf-fps]');
+            const frameGraph = overlay.querySelector('[data-perf-frame-graph]');
+            const frameText = overlay.querySelector('[data-perf-frame-ms]');
+            const fps = currentFps || (deltaTime > 0 ? 1 / deltaTime : 0);
+            const frameTimeMs = lastFrameTimeMs || deltaTime * 1000;
+            frameTimeHistory.push(frameTimeMs);
+            if (frameTimeHistory.length > FRAME_TIME_HISTORY_LIMIT) frameTimeHistory.shift();
+
+            if (fpsText) {
+                fpsText.hidden = !showFpsCounter;
+                fpsText.textContent = `FPS ${fps.toFixed(2)} |`;
+            }
+            if (frameGraph) {
+                frameGraph.hidden = !showFrameTimeLine;
+                if (showFrameTimeLine) drawFrameTimeGraph(frameGraph, frameTimeHistory);
+            }
+            if (frameText) {
+                frameText.hidden = !showFrameTimeLine;
+                frameText.textContent = `${frameTimeMs.toFixed(2)} ms`;
+            }
+        }
+
+        function drawFrameTimeGraph(canvas, history) {
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            const width = canvas.width;
+            const height = canvas.height;
+            ctx.clearRect(0, 0, width, height);
+
+            ctx.fillStyle = 'rgba(4, 10, 24, 0.48)';
+            ctx.fillRect(0, 0, width, height);
+            ctx.strokeStyle = 'rgba(125, 175, 255, 0.18)';
+            ctx.lineWidth = 1;
+            [16.67, 33.33].forEach((mark) => {
+                const y = height - (mark / 50) * height;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            });
+
+            if (history.length < 2) return;
+            const maxFrameTime = Math.max(50, Math.max(...history) * 1.15);
+            const step = width / Math.max(1, FRAME_TIME_HISTORY_LIMIT - 1);
+            const startX = width - (history.length - 1) * step;
+            ctx.strokeStyle = '#8fe7ff';
+            ctx.lineWidth = 1.35;
+            ctx.beginPath();
+            history.forEach((value, index) => {
+                const x = startX + index * step;
+                const y = height - Math.min(1, value / maxFrameTime) * (height - 2) - 1;
+                if (index === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            const latest = history[history.length - 1];
+            const latestY = height - Math.min(1, latest / maxFrameTime) * (height - 2) - 1;
+            ctx.fillStyle = '#d9fbff';
+            ctx.fillRect(width - 2, latestY - 1, 2, 2);
         }
 
         function rebuildFluidEffects(seed = currentSeed || 1) {
@@ -2659,15 +2846,17 @@
                 });
             });
 
-            const setUiHidden = (hidden) => {
-                document.body.classList.toggle('wallpaper-mode', hidden);
-                document.body.classList.toggle('ui-hidden', hidden);
-                chaosToolbar.setGlobalUiHidden(hidden);
-                document.getElementById('toggleUiBtn').innerHTML = hidden ? '<i class="fas fa-eye-slash"></i>' : '<i class="fas fa-eye"></i>';
-            };
-
             document.getElementById('toggleUiBtn').addEventListener('click', () => {
-                setUiHidden(!document.body.classList.contains('ui-hidden'));
+                toggleUiHidden();
+            });
+            window.addEventListener('keydown', (event) => {
+                if ((event.key || '').toLowerCase() !== 'escape') return;
+                if (event.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+                if (surfaceExploration.isExplorationModeActive()) return;
+                if (reinforcementSystem.isSequenceInputActive?.()) return;
+                chaosToolbar.toggleCollapsed?.();
+                event.preventDefault();
+                event.stopPropagation();
             });
 
             const settingsButton = document.getElementById('toggleSettingsBtn');
@@ -2754,6 +2943,9 @@
         let fpsFrames = 0;
         let fpsLastSample = performance.now();
         let currentFps = 0;
+        let lastFrameTimeMs = 0;
+        const FRAME_TIME_HISTORY_LIMIT = 180;
+        const frameTimeHistory = [];
         let autoQualityCooldown = 0;
         function animate() {
             requestAnimationFrame(animate);
@@ -2767,6 +2959,7 @@
             }
             lastRenderStamp = now;
             const deltaTime = Math.min(0.05, clock.getDelta());
+            lastFrameTimeMs = deltaTime * 1000;
             time += 0.005;
             fpsAccumulator += deltaTime;
             fpsFrames++;
@@ -2828,6 +3021,7 @@
                     }
                 }
             }
+            updatePerformanceOverlay(deltaTime);
             
             if (currentPlanetMesh) {
                 if (currentProfile?.type === 'blackhole') {
@@ -2886,11 +3080,13 @@
             dinoLife.update(deltaTime);
             universeExpansion.update(deltaTime, time);
             planetChaos?.update(deltaTime);
+            reinforcementSystem.update(deltaTime);
+            vehicleSystem.update(deltaTime);
             surfaceExploration.updateExplorationControls(deltaTime);
             vegetationSystem.update(deltaTime, camera);
             cosmicFluidEffects.update(deltaTime, time);
             
-            if (!surfaceExploration.isExplorationModeActive()) {
+            if (!surfaceExploration.isExplorationModeActive() && !vehicleSystem.isVehicleModeActive()) {
                 controls.update(); // atualiza se houver interação
             }
             updateCinematicLighting(deltaTime, cinematicLighting, {

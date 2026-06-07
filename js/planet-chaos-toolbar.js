@@ -396,6 +396,10 @@ export class PlanetChaosToolbar extends EventTarget {
         if (wasEnabled !== this.isToolsEnabled()) this.emit('tools-enabled-change');
     }
 
+    toggleCollapsed() {
+        this.setCollapsed(!this.state.collapsed);
+    }
+
     isCollapsed() {
         return Boolean(this.state.collapsed);
     }

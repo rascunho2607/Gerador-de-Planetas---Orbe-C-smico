@@ -111,7 +111,9 @@ const DEFAULT_SETTINGS = {
     distantUpdateReduction: true,
     maxActiveObjects: 220,
     showFps: true,
-    showStats: true
+    showStats: true,
+    showFpsCounter: false,
+    showFrameTimeLine: false
 };
 
 const GRAPHICS_PRESETS = {
@@ -428,7 +430,9 @@ const CONTROL_SECTIONS = [
             { key: 'distantUpdateReduction', label: 'Atualizacao distante reduzida', type: 'checkbox' },
             { key: 'maxActiveObjects', label: 'Limite objetos ativos', type: 'range', min: 60, max: 360, step: 10 },
             { key: 'showFps', label: 'Mostrar FPS', type: 'checkbox' },
-            { key: 'showStats', label: 'Mostrar estatisticas', type: 'checkbox' }
+            { key: 'showStats', label: 'Mostrar estatisticas', type: 'checkbox' },
+            { key: 'showFpsCounter', label: 'Contador FPS na tela', type: 'checkbox' },
+            { key: 'showFrameTimeLine', label: 'Linha frame time na tela', type: 'checkbox' }
         ]
     }
 ];
